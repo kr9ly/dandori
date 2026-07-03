@@ -88,6 +88,12 @@ cp -r dandori/skills/* <project>/.claude/skills/
 | `dandori-impl` | 実装。マイルストーン単位のディスパッチ + 発見の還流 |
 | `dandori-gate` | 最終ゲート。全仕様行のトレース表 → コミット裁定 |
 
+## 付録
+
+- [docs/appendix-formal.md](docs/appendix-formal.md) — `formal` ゲートタグ
+  （プロパティベーステスト・形式検証）の発動条件と運用。仕様の主張が
+  全称形（どんな入力でも / どの実行順でも）になったときに開く
+
 ## License
 
 MIT
