@@ -76,10 +76,11 @@ spike:
 impl:
   milestones_done: 2
   milestones_total: 5
+progress: §2 正常系の壁打ち中   # 工程内の現在地（一行）。工程スキルが逐次更新する
 updated: 2026-07-03
 ```
 
-各工程スキルは自工程の完了時にこのファイルを更新する。フェーズの逆行（例: spike で前提が
+各工程スキルは**工程内でドキュメント（spec.md / design.md / plan.md）を更新するたびに** `progress` と `updated` を書き換え、state.yaml を常に現状と一致させる。工程完了時だけの更新では、中断時に再開点が失われる。フェーズの逆行（例: spike で前提が
 崩れて spec に戻る）も正当な遷移 — その場合 `phases_done` から該当フェーズを外し、理由を
 design.md の発見ログに記録する。
 
