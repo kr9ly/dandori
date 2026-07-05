@@ -110,6 +110,9 @@ cp -r dandori/skills/* <project>/.claude/skills/
 - [docs/appendix-formal.md](docs/appendix-formal.md) — `formal` ゲートタグ
   （プロパティベーステスト・形式検証）の発動条件と運用。仕様の主張が
   全称形（どんな入力でも / どの実行順でも）になったときに開く
+- [docs/philosophy.md](docs/philosophy.md) — 理論的背景。ATDD / V字モデル /
+  correct by construction との系譜、既存スペック駆動ツールとの差分、
+  なぜエージェント時代にこのプロセスが経済的に成立するのか
 
 ## License
 
