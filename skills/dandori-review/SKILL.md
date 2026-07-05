@@ -25,8 +25,8 @@ description: dandori プロセスの独立レビュー工程。spec.md と desig
 
 ```
 あなたは実装ドキュメントの独立レビューアです。以下の2ファイルを読み、批評してください。
-- <specs/<feature>/spec.md への絶対パス>
-- <specs/<feature>/design.md への絶対パス>
+- <.dandori/specs/<feature>/spec.md への絶対パス>
+- <.dandori/specs/<feature>/design.md への絶対パス>
 
 観点:
 1. 要件不達 — この設計を実装しても spec のゴールを満たさない箇所はないか

@@ -46,7 +46,7 @@ dandori（入口・トリアージ）
 再開できる。`dandori` と一言打てば現在地から再開する。
 
 ```
-<project>/specs/<feature>/
+<project>/.dandori/specs/<feature>/
 ├── state.yaml      # 現在フェーズ・進捗
 ├── spec.md         # 要件 + 振る舞い仕様 + 品質ゲート【長寿命・実装後も残す】
 ├── design.md       # 前提・改変箇所・不変条件 + 発見ログ【実装完了まで】
