@@ -58,14 +58,17 @@ spec.md の全 B 行について、以下の表を **`specs/<feature>/trace.md` 
 
 ### 4. クローズ
 
-コミット完了後:
+コミット完了後、**この順序で**行う（昇格元の処分が先行すると知見が失われる）:
 
-- plan.md と trace.md は役目を終える（削除 or アーカイブ。リポジトリ方針に従う）
-- design.md は発見ログの spec 還流を済ませた上で同様に処分してよい
-- spec.md は長寿命ドキュメントとして残す
-- state.yaml: `phase: done`
-- `.dandori/map/` が存在すれば、今回の変更を map に反映する dandori-survey の
-  update 実行を提案する（コードが変わった直後が更新の自然なタイミング）
+1. `.dandori/map/` が存在すれば、dandori-survey の **update + promote** の実行を
+   提案する — update は今回のコード変更の map への反映、promote は design.md /
+   trace.md に蓄積されたフロー知見（実行検証済の既存コード挙動、不変条件、
+   既存理解の訂正）の map への昇格。昇格元は次のステップで処分されるため、
+   **必ず処分より前に**実行する
+2. plan.md と trace.md は役目を終える（削除 or アーカイブ。リポジトリ方針に従う）
+3. design.md は発見ログの spec 還流（§3）を済ませた上で同様に処分してよい
+4. spec.md は長寿命ドキュメントとして残す
+5. state.yaml: `phase: done`
 
 ## 完了条件
 
