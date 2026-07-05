@@ -69,4 +69,5 @@ plan.md のマニフェストに従い、実装エージェントに渡す情報
 
 - 全マイルストーンのゲートが通過している
 - すべての [発見] が design.md の発見ログに記録され、裁定済みである
-- state.yaml: `phase: gate`、`phases_done` に impl 追加
+- state.yaml: `phases_done` に impl 追加。次フェーズはフルコースなら `phase: codereview`、
+  短縮コースなら `phase: gate`
