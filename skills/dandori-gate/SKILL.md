@@ -64,6 +64,8 @@ spec.md の全 B 行について、以下の表を **`specs/<feature>/trace.md` 
 - design.md は発見ログの spec 還流を済ませた上で同様に処分してよい
 - spec.md は長寿命ドキュメントとして残す
 - state.yaml: `phase: done`
+- `.dandori/map/` が存在すれば、今回の変更を map に反映する dandori-survey の
+  update 実行を提案する（コードが変わった直後が更新の自然なタイミング）
 
 ## 完了条件
 
