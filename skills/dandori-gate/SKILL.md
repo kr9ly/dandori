@@ -39,6 +39,13 @@ spec.md の全 B 行について、以下の表を **`.dandori/specs/<feature>/t
   （`node <dandori-repo>/skills/dandori-spec/scripts/check-state-model.ts <spec.md>`）。
   impl 中の B 行増減後のカバレッジを再検証するため。指摘（exit 1/2）は ❌ 相当、
   **ground 送り項目の残存は ⚠️ 相当**として trace.md に行を足し、§3 の裁定対象に含める
+- 状態マップ（`.dandori/map/states.md` に `dandori-state-map` ブロック）があるプロジェクトは
+  さらに（無ければこの項はスキップ）:
+  - **マップ単体の検査**を実行する（`node .../check-state-model.ts .dandori/map/states.md` —
+    M1/M2/M4）。指摘は ❌ 相当として trace.md に行を足す
+  - design.md の「共有状態への影響」節の**影響 spec 一覧を提示し、回帰確認の要否を
+    ユーザーと裁定する**（影響 spec の B 行を全数再検証するかはコスト次第 — 裁定の記録が
+    必須で、全数再検証は必須ではない）
 
 ### 2. manual 項目のユーザー確認
 
@@ -68,7 +75,8 @@ spec.md の全 B 行について、以下の表を **`.dandori/specs/<feature>/t
    提案する — update は今回のコード変更の map への反映、promote は design.md /
    trace.md に蓄積されたフロー知見（実行検証済の既存コード挙動、不変条件、
    既存理解の訂正）の map への昇格。昇格元は次のステップで処分されるため、
-   **必ず処分より前に**実行する
+   **必ず処分より前に**実行する。状態マップがあれば、design.md の「共有状態への影響」で
+   宣言した writers/readers の増減を states.md に反映するのも update の一部
 2. plan.md と trace.md は役目を終える（削除 or アーカイブ。リポジトリ方針に従う）
 3. design.md は発見ログの spec 還流（§3）を済ませた上で同様に処分してよい
 4. spec.md は長寿命ドキュメントとして残す
