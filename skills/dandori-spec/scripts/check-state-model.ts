@@ -31,7 +31,23 @@
  *   - Covers: base + obs:S14 / mod:S22 / chain:S16   観測・修飾・連鎖のカバー
  *   - Covers: one-off — 理由                単発バグ再現行（直積検査から除外）
  *
- * 実行: node check-state-model.ts <spec.md へのパス>
+ * 状態マップ連携（appendix-state-map.md）— **任意**。spec が軸に `ref:` を書かなければ
+ * 従来動作と完全に同一で、状態マップは不要。`ref:` を使ったのにマップが見つからない
+ * 場合のみ exit 2（サイレントに検査をスキップしない）:
+ *   M1. borrowed 書き込み違反 — borrowed な storage しか持たない状態に writers がいる
+ *   M2. SSOT 一意性 — storage 複数で ssot が 1 つでない / 非 SSOT に sync/staleness がない
+ *   M3. ref 整合 — spec の ref が未知の状態 ID / 値が canonical の部分集合でない
+ *   M4. shared の外部遷移 — shared な storage があるのに external_writers が空
+ *   Q1. 影響導出 — 状態 ID → その状態を ref する spec / B 行の一覧（検査でなくクエリ）
+ *
+ * 実行モード（入力ファイルの fenced block で自動判別）:
+ *   node check-state-model.ts <spec.md>                       スペック検査（検査 0〜7 + M3）
+ *   node check-state-model.ts <spec.md> --map <states.md>     状態マップの場所を明示
+ *   node check-state-model.ts <states.md>                     状態マップ検査（M1/M2/M4）
+ *   node check-state-model.ts --impact <状態ID> <spec.md...>  影響導出クエリ（Q1）
+ *
+ * 状態マップの探索順: --map 指定 > spec のディレクトリから上位へ .dandori/map/states.md
+ *
  * 終了コード: 0 = 全検査グリーン / 1 = 指摘あり / 2 = パース・モデル定義エラー
  */
 
@@ -49,6 +65,8 @@ interface Axis {
   baseInferred: boolean
   perItem: boolean
   values: AxisValue[]
+  /** 状態マップ（states.md）の canonical 状態 ID への参照 — 共有状態に触れる軸のみ任意で付ける */
+  ref?: string
 }
 interface Observation { id: string; of: string[]; note?: string }
 interface Modifier { id: string; affects: string[]; note?: string }
@@ -133,8 +151,20 @@ function parseYamlSubset(src: string, baseLineNo: number): unknown {
     const ind = ls[pos].indent
     const items: unknown[] = []
     while (pos < ls.length && ls[pos].indent === ind && ls[pos].text.startsWith('- ')) {
-      items.push(parseFlow(ls[pos].text.slice(2).trim(), ls[pos].no))
-      pos++
+      const head: Ln = { indent: ind + 2, text: ls[pos].text.slice(2).trim(), no: ls[pos].no }
+      let end = pos + 1
+      while (end < ls.length && ls[end].indent > ind) end++
+      // `- key: value` + 継続行 = シーケンス項目としてのブロックマップ（状態マップの storages 等）
+      if (/^("[^"]*"|[^:\s{["']+):(\s|$)/.test(head.text)) {
+        const sub = [head, ...ls.slice(pos + 1, end)]
+        const [v, next] = parseMapBlock(sub, 0)
+        if (next < sub.length) fail(`L${sub[next].no}: パースできない行: ${sub[next].text}`)
+        items.push(v)
+      } else {
+        if (end > pos + 1) fail(`L${ls[pos + 1].no}: シーケンス項目の継続行を解釈できない: ${ls[pos + 1].text}`)
+        items.push(parseFlow(head.text, head.no))
+      }
+      pos = end
     }
     return [items, pos]
   }
@@ -243,31 +273,48 @@ function parseYamlSubset(src: string, baseLineNo: number): unknown {
   }
 }
 
-// ---- spec.md 抽出 -------------------------------------------------------------
+// ---- 引数とファイル読み込み ----------------------------------------------------
 
-const specPath = process.argv[2]
-if (!specPath || specPath.startsWith('--')) {
-  console.error('usage: node check-state-model.ts <spec.md>')
+const argvRest = process.argv.slice(2)
+let mapPathArg: string | null = null
+let impactId: string | null = null
+const inputPaths: string[] = []
+for (let i = 0; i < argvRest.length; i++) {
+  const a = argvRest[i]
+  if (a === '--map') { mapPathArg = argvRest[++i] ?? null; continue }
+  if (a === '--impact') { impactId = argvRest[++i] ?? null; continue }
+  if (a.startsWith('--')) { console.error(`未知のオプション: ${a}`); process.exit(2) }
+  inputPaths.push(a)
+}
+if (inputPaths.length === 0 || (impactId === null && inputPaths.length !== 1)) {
+  console.error('usage: node check-state-model.ts <spec.md | states.md> [--map <states.md>]\n' +
+    '       node check-state-model.ts --impact <状態ID> <spec.md...>')
   process.exit(2)
 }
 
 // @ts-ignore -- 依存なし実行のため @types/node を入れていない
-const { readFileSync } = await import('node:fs') as { readFileSync(path: string, enc: string): string }
-let specText: string
-try {
-  specText = readFileSync(specPath, 'utf-8')
-} catch {
-  console.error(`spec を読めない: ${specPath}`)
-  process.exit(2)
+const { readFileSync, existsSync } = await import('node:fs') as
+  { readFileSync(path: string, enc: string): string; existsSync(p: string): boolean }
+// @ts-ignore -- 同上
+const { dirname, join, resolve } = await import('node:path') as
+  { dirname(p: string): string; join(...p: string[]): string; resolve(p: string): string }
+
+function readLines(path: string, what: string): string[] {
+  try {
+    return readFileSync(path, 'utf-8').split('\n')
+  } catch {
+    console.error(`${what}を読めない: ${path}`)
+    process.exit(2)
+  }
 }
-const specLines = specText.split('\n')
 
 /** fenced block 抽出（複数あればエラー） */
-function extractModelBlock(): { body: string; startLine: number } | null {
+function extractBlock(lines: string[], info: string): { body: string; startLine: number } | null {
   const blocks: { body: string; startLine: number }[] = []
   let cur: { start: number; lines: string[] } | null = null
-  specLines.forEach((line, idx) => {
-    if (cur === null && /^```dandori-state-model\s*$/.test(line.trim())) {
+  const open = new RegExp(`^\`\`\`${info}\\s*$`)
+  lines.forEach((line, idx) => {
+    if (cur === null && open.test(line.trim())) {
       cur = { start: idx + 2, lines: [] } // 本文は次行から（1-indexed）
     } else if (cur !== null && /^```\s*$/.test(line.trim())) {
       blocks.push({ body: cur.lines.join('\n'), startLine: cur.start })
@@ -276,13 +323,240 @@ function extractModelBlock(): { body: string; startLine: number } | null {
       cur.lines.push(line)
     }
   })
-  if (cur !== null) { fail('dandori-state-model ブロックが閉じていない'); return null }
+  if (cur !== null) { fail(`${info} ブロックが閉じていない`); return null }
   if (blocks.length === 0) return null
-  if (blocks.length > 1) fail(`dandori-state-model ブロックが ${blocks.length} 個ある — 1 個に統合すること`)
+  if (blocks.length > 1) fail(`${info} ブロックが ${blocks.length} 個ある — 1 個に統合すること`)
   return blocks[0]
 }
 
-const block = extractModelBlock()
+interface Finding { check: string; detail: string }
+
+function printGroupedFindings(list: Finding[]): void {
+  const byCheck = new Map<string, Finding[]>()
+  for (const f of list) {
+    if (!byCheck.has(f.check)) byCheck.set(f.check, [])
+    byCheck.get(f.check)!.push(f)
+  }
+  for (const [check, group] of [...byCheck.entries()].sort()) {
+    console.log(`## ${check}（${group.length} 件）`)
+    for (const f of group) console.log(`- ${f.detail}`)
+    console.log('')
+  }
+}
+
+// ---- 状態マップ（states.md の dandori-state-map ブロック — appendix-state-map.md） ----
+
+interface MapStorage {
+  at: string
+  kind: string
+  cls: 'owned' | 'shared' | 'borrowed'
+  ssot: boolean
+  sync?: string
+  staleness?: string
+  anchor: string
+}
+interface MapRef { via: string; anchor: string }
+interface MapExternalWriter { who: string; note?: string }
+interface MapState {
+  id: string
+  label: string
+  /** canonical 値 ID の列挙。列挙型でない状態（数値等）は null */
+  values: string[] | null
+  storages: MapStorage[]
+  writers: MapRef[]
+  externalWriters: MapExternalWriter[]
+  readers: MapRef[]
+}
+interface StateMap { states: MapState[] }
+
+function failMap(msg: string): void {
+  console.error(`[map-error] ${msg}`)
+  hardErrors++
+}
+
+function buildStateMap(raw: unknown): StateMap {
+  const r = asRecord(raw)
+  for (const key of Object.keys(r)) {
+    if (key !== 'states') failMap(`未知のトップレベルキー: ${key}（語彙は固定 — appendix-state-map.md 参照）`)
+  }
+  const states: MapState[] = Object.entries(asRecord(r.states)).map(([id, def]) => {
+    const d = asRecord(def)
+    const known = new Set(['label', 'values', 'storages', 'writers', 'external_writers', 'readers'])
+    for (const k of Object.keys(d)) if (!known.has(k)) failMap(`states.${id}: 未知のキー ${k}`)
+
+    const values = d.values === undefined ? null : asStringArray(d.values, `states.${id}.values`)
+    if (values) {
+      const seen = new Set<string>()
+      for (const v of values) {
+        if (seen.has(v)) failMap(`states.${id}: 値 ${v} が重複`)
+        seen.add(v)
+      }
+    }
+    const storages: MapStorage[] = asArray(d.storages).map((s, i) => {
+      const sr = asRecord(s)
+      const ctx = `states.${id}.storages[${i}]`
+      const cls = asString(sr.class, `${ctx}.class`)
+      if (cls !== 'owned' && cls !== 'shared' && cls !== 'borrowed') {
+        failMap(`${ctx}.class: owned / shared / borrowed のいずれか（実際: ${cls}）`)
+      }
+      return {
+        at: asString(sr.at, `${ctx}.at`),
+        kind: asString(sr.kind, `${ctx}.kind`),
+        cls: cls as MapStorage['cls'],
+        ssot: sr.ssot === true,
+        sync: typeof sr.sync === 'string' ? sr.sync : undefined,
+        staleness: typeof sr.staleness === 'string' ? sr.staleness : undefined,
+        anchor: asString(sr.anchor, `${ctx}.anchor`),
+      }
+    })
+    if (storages.length === 0) failMap(`states.${id}: storages が空 — 保存場所のない状態はマップに載せない`)
+
+    const parseRefs = (v: unknown, field: string): MapRef[] => asArray(v).map((w, i) => {
+      const wr = asRecord(w)
+      return {
+        via: asString(wr.via, `states.${id}.${field}[${i}].via`),
+        anchor: asString(wr.anchor, `states.${id}.${field}[${i}].anchor`),
+      }
+    })
+    const externalWriters: MapExternalWriter[] = asArray(d.external_writers).map((w, i) => {
+      const wr = asRecord(w)
+      return {
+        who: asString(wr.who, `states.${id}.external_writers[${i}].who`),
+        note: typeof wr.note === 'string' ? wr.note : undefined,
+      }
+    })
+
+    return {
+      id,
+      label: typeof d.label === 'string' ? d.label : id,
+      values,
+      storages,
+      writers: parseRefs(d.writers, 'writers'),
+      externalWriters,
+      readers: parseRefs(d.readers, 'readers'),
+    }
+  })
+  return { states }
+}
+
+function loadStateMap(path: string): StateMap {
+  const lines = readLines(path, '状態マップ')
+  const b = extractBlock(lines, 'dandori-state-map')
+  if (b === null) {
+    console.error(`${path}: dandori-state-map ブロックが見つからない`)
+    process.exit(2)
+  }
+  return buildStateMap(parseYamlSubset(b.body, b.startLine))
+}
+
+/** spec のディレクトリから上位へ .dandori/map/states.md を探す */
+function discoverStatesMd(fromFile: string): string | null {
+  let dir = resolve(dirname(fromFile))
+  for (;;) {
+    const cand = join(dir, '.dandori', 'map', 'states.md')
+    if (existsSync(cand)) return cand
+    const parent = dirname(dir)
+    if (parent === dir) return null
+    dir = parent
+  }
+}
+
+/** M1 / M2 / M4 — マップ単体の整合検査 */
+function checkStateMap(smap: StateMap): Finding[] {
+  const out: Finding[] = []
+  for (const st of smap.states) {
+    if (st.storages.length > 0 && st.storages.every(s => s.cls === 'borrowed') && st.writers.length > 0) {
+      out.push({
+        check: 'M1:borrowed書き込み違反',
+        detail: `状態 ${st.id} は borrowed な storage しか持たないのに writers がいる（${st.writers.map(w => w.via).join(', ')}）` +
+          ` — 区分の誤りか、SSOT 侵犯コードの発見`,
+      })
+    }
+    if (st.storages.length >= 2) {
+      const ssots = st.storages.filter(s => s.ssot)
+      if (ssots.length !== 1) {
+        out.push({
+          check: 'M2:SSOT一意性',
+          detail: `状態 ${st.id} の storage が ${st.storages.length} 個あるのに ssot: true が ${ssots.length} 個 — ちょうど 1 つに裁定する`,
+        })
+      }
+      for (const s of st.storages.filter(s => !s.ssot)) {
+        if (!s.sync && !s.staleness) {
+          out.push({
+            check: 'M2:SSOT一意性',
+            detail: `状態 ${st.id} の非 SSOT storage「${s.at}」に sync も staleness もない — 同期責務か鮮度の裁定が必要`,
+          })
+        }
+      }
+    }
+    if (st.storages.some(s => s.cls === 'shared') && st.externalWriters.length === 0) {
+      out.push({
+        check: 'M4:shared外部遷移',
+        detail: `状態 ${st.id} は shared な storage を持つのに external_writers が空 — 外部起因の遷移の考慮漏れ`,
+      })
+    }
+  }
+  return out
+}
+
+// ---- 影響導出モード（Q1: --impact <状態ID> <spec.md...>） ------------------------
+
+if (impactId !== null) {
+  console.log(`# 影響導出 — 状態 ${impactId}`)
+  console.log('')
+  let refSpecs = 0
+  for (const p of inputPaths) {
+    const lines = readLines(p, 'spec')
+    const b = extractBlock(lines, 'dandori-state-model')
+    if (b === null) { console.log(`- ${p}: dandori-state-model ブロックなし — 対象外`); continue }
+    const m = buildModel(parseYamlSubset(b.body, b.startLine))
+    const hits = m.axes.filter(a => a.ref === impactId)
+    if (hits.length === 0) continue
+    refSpecs++
+    const rows = extractBRows(lines)
+    for (const axis of hits) {
+      const direct = rows.filter(r => r.covers && new RegExp(`(^|[\\s+])${axis.id}=`).test(r.covers.raw))
+      console.log(`## ${p} — 軸 ${axis.id}（${axis.label}）`)
+      console.log(`- 直接カバー: ${direct.length === 0 ? 'なし' : direct.map(r => r.b).join(', ')}`)
+      console.log(`- 暗黙（base 値で通過）: ${rows.length - direct.length} 行 — 過大近似では全 B 行が回帰候補`)
+      console.log('')
+    }
+  }
+  if (refSpecs === 0) console.log(`（${impactId} を ref する spec なし）`)
+  process.exit(hardErrors > 0 ? 2 : 0)
+}
+
+// ---- 入力ファイルの種別判定 -----------------------------------------------------
+
+const specPath = inputPaths[0]
+const specLines = readLines(specPath, 'ファイル')
+
+// dandori-state-map ブロックだけを持つファイル → 状態マップ検査モード（M1/M2/M4）
+if (specLines.some(l => /^```dandori-state-map\s*$/.test(l.trim())) &&
+    !specLines.some(l => /^```dandori-state-model\s*$/.test(l.trim()))) {
+  const smap = loadStateMap(specPath)
+  const mapFindings = checkStateMap(smap)
+  console.log(`# 状態マップ検査レポート — ${specPath}`)
+  console.log(`状態 ${smap.states.length} / storage ${smap.states.reduce((n, s) => n + s.storages.length, 0)}` +
+    ` / writers ${smap.states.reduce((n, s) => n + s.writers.length, 0)}` +
+    ` / readers ${smap.states.reduce((n, s) => n + s.readers.length, 0)}`)
+  console.log('')
+  if (hardErrors > 0) {
+    console.error(`マップ定義エラー ${hardErrors} 件 — 検査結果は不完全`)
+    process.exit(2)
+  }
+  if (mapFindings.length === 0) {
+    console.log('指摘なし — 全検査グリーン')
+    process.exit(0)
+  }
+  printGroupedFindings(mapFindings)
+  console.log(`計 ${mapFindings.length} 件`)
+  process.exit(1)
+}
+
+// ---- spec.md 抽出 -------------------------------------------------------------
+
+const block = extractBlock(specLines, 'dandori-state-model')
 if (block === null) {
   console.error(`${specPath}: dandori-state-model ブロックが見つからない — この spec は状態モデル運用の対象外か、未執筆`)
   process.exit(2)
@@ -335,6 +609,7 @@ function buildModel(raw: unknown): Model {
       baseInferred,
       perItem: d.per_item === true,
       values,
+      ref: typeof d.ref === 'string' ? d.ref : undefined,
     }
   })
 
@@ -392,6 +667,21 @@ function buildModel(raw: unknown): Model {
 const model = buildModel(parseYamlSubset(block.body, block.startLine))
 const axisById = new Map(model.axes.map(a => [a.id, a]))
 
+// ---- ref: 状態マップ参照の解決（任意 — ref を使わない spec では従来動作と同一） -----
+
+const refAxes = model.axes.filter(a => a.ref !== undefined)
+let stateMap: StateMap | null = null
+let stateMapPath: string | null = null
+if (refAxes.length > 0) {
+  stateMapPath = mapPathArg ?? discoverStatesMd(specPath)
+  if (stateMapPath === null) {
+    console.error(`ref: を使う spec には状態マップが必要（ref 使用軸: ${refAxes.map(a => a.id).join(', ')}） — ` +
+      `--map <states.md> で指定するか、spec の上位に .dandori/map/states.md を置く`)
+    process.exit(2)
+  }
+  stateMap = loadStateMap(stateMapPath)
+}
+
 // ---- モデル内参照の検証 --------------------------------------------------------
 
 function checkAxisRef(axisId: string, ctx: string): Axis | undefined {
@@ -444,11 +734,11 @@ for (const o of model.only) {
 
 interface BRow { b: string; title: string; line: number; covers: { raw: string; line: number } | null }
 
-function extractBRows(): BRow[] {
+function extractBRows(lines: string[]): BRow[] {
   const rows: BRow[] = []
   let cur: BRow | null = null
   let inFence = false
-  specLines.forEach((line, idx) => {
+  lines.forEach((line, idx) => {
     if (/^```/.test(line.trim())) { inFence = !inFence; return }
     if (inFence) return
     const heading = line.match(/^#{2,6}\s+(B-[\w.()]+(?:〜B-[\w.()]+)?)\s*[:：]\s*(.*)$/)
@@ -474,7 +764,7 @@ function extractBRows(): BRow[] {
   return rows
 }
 
-const bRows = extractBRows()
+const bRows = extractBRows(specLines)
 {
   const seen = new Set<string>()
   for (const row of bRows) {
@@ -551,7 +841,6 @@ const tuples = covers.map(c => ({ cover: c, tuple: tupleOf(c) }))
 
 // ---- 検査 ----------------------------------------------------------------------
 
-interface Finding { check: string; detail: string }
 const findings: Finding[] = []
 
 // ---- 検査 0: Covers 欠落 -------------------------------------------------------
@@ -724,6 +1013,33 @@ for (const axis of model.axes.filter(a => a.perItem)) {
   }
 }
 
+// ---- 検査 M3: ref 整合（状態マップ紐づけ — ref 使用時のみ発動） -------------------
+
+if (stateMap !== null) {
+  const stById = new Map(stateMap.states.map(s => [s.id, s]))
+  for (const axis of refAxes) {
+    const st = stById.get(axis.ref!)
+    if (!st) {
+      findings.push({
+        check: 'M3:ref整合',
+        detail: `軸 ${axis.id} の ref ${axis.ref} が状態マップ（${stateMapPath}）にない — typo かマップの陳腐化`,
+      })
+      continue
+    }
+    if (st.values !== null) {
+      for (const v of axis.values) {
+        if (!st.values.includes(v.id)) {
+          findings.push({
+            check: 'M3:ref整合',
+            detail: `軸 ${axis.id} の値 ${v.id} が状態 ${axis.ref} の canonical 値 {${st.values.join(', ')}} にない` +
+              ` — ref 付き軸は canonical 値 ID を使う（appendix-state-map.md）`,
+          })
+        }
+      }
+    }
+  }
+}
+
 // ---- ground 送り項目（指摘とは別枠） -------------------------------------------
 
 const groundItems: string[] = []
@@ -743,6 +1059,9 @@ console.log(`# 状態モデル検査レポート — ${specPath}`)
 console.log(`軸 ${model.axes.length} / 値 ${model.axes.reduce((n, a) => n + a.values.length, 0)}` +
   ` / B 行 ${bRows.length}（モデル対象 ${covers.length} / one-off ${oneOffCovers.length}）` +
   ` / 直交宣言 ${model.orthogonal.length + model.orthogonalGroups.length} / 依存交点 ${model.dependent.length}`)
+if (stateMap !== null) {
+  console.log(`状態マップ: ${stateMapPath}（ref 軸: ${refAxes.map(a => `${a.id}→${a.ref}`).join(', ')}）`)
+}
 if (oneOffCovers.length > 0) {
   console.log(`one-off（直積検査から除外）: ${oneOffCovers.map(c => c.b).join(', ')}`)
 }
@@ -764,16 +1083,7 @@ if (findings.length === 0) {
     ? '指摘なし — 全検査グリーン'
     : `指摘なし — グリーン（ground 送り ${groundItems.length} 件あり）`)
 } else {
-  const byCheck = new Map<string, Finding[]>()
-  for (const f of findings) {
-    if (!byCheck.has(f.check)) byCheck.set(f.check, [])
-    byCheck.get(f.check)!.push(f)
-  }
-  for (const [check, list] of [...byCheck.entries()].sort()) {
-    console.log(`## ${check}（${list.length} 件）`)
-    for (const f of list) console.log(`- ${f.detail}`)
-    console.log('')
-  }
+  printGroupedFindings(findings)
   console.log(`計 ${findings.length} 件`)
   process.exit(1)
 }
