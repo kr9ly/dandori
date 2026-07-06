@@ -1,7 +1,8 @@
 # 記法サンプル兼回帰フィクスチャ — 状態モデルの全構文
 
 チェッカーの期待出力: 指摘 = 検査 0（B-6 の Covers 欠落）の 1 件（exit 1）、
-ground 送り = 3 件（ペア裁定 route×payment / per-item 混在裁定 stock / base 推定 stock）。
+ground 送り = 3 件（ペア裁定 route×payment / per-item 混在裁定 stock / base 推定 stock）、
+除外行 = one-off 1 件（B-5）+ out-of-model 1 件（B-8。除外列挙は 8 件超で折りたたみ）。
 
 ## 状態モデル
 
@@ -56,3 +57,8 @@ chains:
 
 ### B-7: 強制上書き
 - Covers: base + payment=other + route=app
+
+### B-8: 異常系（モデル対象外）
+- Covers: out-of-model — 異常系 E1a（エラーマトリクス行は形式化しない裁定）
+- Given: 決済 API がタイムアウト
+- Then: 422

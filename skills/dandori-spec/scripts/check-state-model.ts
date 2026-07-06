@@ -30,6 +30,7 @@
  *   - Covers: base + stock=S11+S12          混在（per-item 軸で 1 注文内に複数値が同居）
  *   - Covers: base + obs:S14 / mod:S22 / chain:S16   観測・修飾・連鎖のカバー
  *   - Covers: one-off — 理由                単発バグ再現行（直積検査から除外）
+ *   - Covers: out-of-model — 理由           モデル対象外の行（異常系マトリクス等 — 同上）
  *
  * 状態マップ連携（appendix-state-map.md）— **任意**。spec が軸に `ref:` を書かなければ
  * 従来動作と完全に同一で、状態マップは不要。`ref:` を使ったのにマップが見つからない
@@ -85,8 +86,9 @@ interface Cover {
   b: string
   title: string
   line: number
-  oneOff: boolean
-  oneOffNote?: string
+  /** 直積検査からの除外区分: one-off = 単発バグ再現 / out-of-model = モデル対象外（異常系マトリクス等） */
+  excluded?: 'one-off' | 'out-of-model'
+  excludedNote?: string
   cells: Record<string, CellSpec>
   extras: string[]
 }
@@ -776,8 +778,13 @@ const bRows = extractBRows(specLines)
 function parseCovers(row: BRow): Cover | null {
   if (!row.covers) return null
   const raw = row.covers.raw
-  const oneOff = raw.match(/^one-off\s*(?:[—－(（-]\s*(.*?)\s*[)）]?)?$/)
-  if (oneOff) return { b: row.b, title: row.title, line: row.covers.line, oneOff: true, oneOffNote: oneOff[1], cells: {}, extras: [] }
+  const excluded = raw.match(/^(one-off|out-of-model)\s*(?:[—－(（-]\s*(.*?)\s*[)）]?)?$/)
+  if (excluded) {
+    return {
+      b: row.b, title: row.title, line: row.covers.line,
+      excluded: excluded[1] as Cover['excluded'], excludedNote: excluded[2], cells: {}, extras: [],
+    }
+  }
 
   const cells: Record<string, CellSpec> = {}
   const extras: string[] = []
@@ -805,13 +812,14 @@ function parseCovers(row: BRow): Cover | null {
     }
     fail(`${row.b}: Covers トークンを解釈できない: ${tok}`)
   }
-  if (tokens[0] !== 'base') fail(`${row.b}: Covers は base で始める（one-off を除く）— ${raw}`)
-  return { b: row.b, title: row.title, line: row.covers.line, oneOff: false, cells, extras }
+  if (tokens[0] !== 'base') fail(`${row.b}: Covers は base で始める（one-off / out-of-model を除く）— ${raw}`)
+  return { b: row.b, title: row.title, line: row.covers.line, cells, extras }
 }
 
 const allCovers = bRows.map(parseCovers).filter((c): c is Cover => c !== null)
-const oneOffCovers = allCovers.filter(c => c.oneOff)
-const covers = allCovers.filter(c => !c.oneOff)
+const oneOffCovers = allCovers.filter(c => c.excluded === 'one-off')
+const outOfModelCovers = allCovers.filter(c => c.excluded === 'out-of-model')
+const covers = allCovers.filter(c => c.excluded === undefined)
 
 // extras の参照検証
 const chainFroms = new Set(model.chains.map(c => c.from))
@@ -848,7 +856,8 @@ const findings: Finding[] = []
 for (const row of bRows.filter(r => r.covers === null)) {
   findings.push({
     check: '0:Covers欠落',
-    detail: `${row.b} (L${row.line}) に Covers フィールドがない — モデル対象外なら one-off、対象なら base + デルタを書く`,
+    detail: `${row.b} (L${row.line}) に Covers フィールドがない — 単発バグ再現なら one-off、` +
+      `モデル対象外（異常系マトリクス等）なら out-of-model、対象なら base + デルタを書く`,
   })
 }
 
@@ -1057,14 +1066,21 @@ for (const axis of model.axes.filter(a => a.baseInferred)) {
 
 console.log(`# 状態モデル検査レポート — ${specPath}`)
 console.log(`軸 ${model.axes.length} / 値 ${model.axes.reduce((n, a) => n + a.values.length, 0)}` +
-  ` / B 行 ${bRows.length}（モデル対象 ${covers.length} / one-off ${oneOffCovers.length}）` +
+  ` / B 行 ${bRows.length}（モデル対象 ${covers.length} / one-off ${oneOffCovers.length}` +
+  (outOfModelCovers.length > 0 ? ` / out-of-model ${outOfModelCovers.length}` : '') + `）` +
   ` / 直交宣言 ${model.orthogonal.length + model.orthogonalGroups.length} / 依存交点 ${model.dependent.length}`)
 if (stateMap !== null) {
   console.log(`状態マップ: ${stateMapPath}（ref 軸: ${refAxes.map(a => `${a.id}→${a.ref}`).join(', ')}）`)
 }
-if (oneOffCovers.length > 0) {
-  console.log(`one-off（直積検査から除外）: ${oneOffCovers.map(c => c.b).join(', ')}`)
+// 除外行の列挙は 8 件超で折りたたむ（実験 5: 異常系 21 本の列挙はノイズ）
+function printExcluded(label: string, list: Cover[]): void {
+  if (list.length === 0) return
+  console.log(list.length <= 8
+    ? `${label}（直積検査から除外）: ${list.map(c => c.b).join(', ')}`
+    : `${label}（直積検査から除外）: ${list.length} 件 — 一覧は spec の Covers を参照`)
 }
+printExcluded('one-off', oneOffCovers)
+printExcluded('out-of-model', outOfModelCovers)
 console.log('')
 
 if (hardErrors > 0) {
