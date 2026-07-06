@@ -1,4 +1,7 @@
-# 合成フィクスチャ — 新機能検証
+# 記法サンプル兼回帰フィクスチャ — 状態モデルの全構文
+
+チェッカーの期待出力: 指摘 = 検査 0（B-6 の Covers 欠落）の 1 件（exit 1）、
+ground 送り = 3 件（ペア裁定 route×payment / per-item 混在裁定 stock / base 推定 stock）。
 
 ## 状態モデル
 
@@ -20,9 +23,12 @@ axes:
 observations:
   S14: { of: [stock] }
 orthogonal:
-  - { axes: [route, "*"], reason: "導線は他の全軸と独立" }
+  - { axes: [route, stock], reason: "導線は在庫割り当てに影響しない（在庫はカート内容のみで決まる）" }
 dependent:
   - { cells: { payment: S2, stock: S11+S12 }, note: "S2 かつ混在で合算挙動が変わる" }
+ground:
+  - { axes: [route, payment], note: "導線が決済 API の呼び分けに影響するか spec からは裁定不能 — コードで確定" }
+  - { axes: [stock, stock], note: "混在時の在庫引当順序が spec に記述なし — コードで確定（自己ペア = per-item 混在の裁定送り）" }
 chains:
   - { from: S12, to: S11, note: "予約在庫は入荷で通常在庫に続落" }
 ```

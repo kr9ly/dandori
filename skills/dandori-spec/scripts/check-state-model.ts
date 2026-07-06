@@ -15,7 +15,13 @@
  *   5. 連鎖カバレッジ — chains の各エントリにカバーする B 行があるか
  *   6. 観測・修飾カバレッジ — observations / modifiers を検証する B 行があるか
  *   7. per-item 軸の混在 — 商品単位軸の値混在（S11+S12）が宣言もカバーもされていない
- *   8. base 推定 — base 値が推定マーク（`?` サフィックス）のまま
+ *
+ * ground 送り（指摘とは別枠 — exit code に影響しない）:
+ *   - `ground:` 宣言されたペア（spec 時点で直交/依存を裁定できない → ground の確認項目）。
+ *     自己ペア（axes: [stock, stock]）は per-item 混在の裁定送りを表す
+ *   - base の推定マーク（`base: S11?` — 基準シナリオが軸を明言していない）
+ *   fix ゲートは「指摘ゼロ」で通る（ground 項目は残ってよい）。gate 工程では
+ *   ground 項目の残存を要裁定として扱う — 運用は appendix-state-model.md 参照
  *
  * Covers 構文:
  *   - Covers: base                          基準シナリオそのもの
@@ -51,6 +57,8 @@ interface OrthogonalGroup { group: string[]; reason: string }
 interface DependentDecl { cells: Record<string, CellSpec>; note: string; }
 interface OnlyConstraint { axis: string; value: string; requires: Record<string, string[]>; note: string }
 interface Chain { from: string; to: string; note: string }
+/** ground 送り: spec 時点で裁定できないペア（自己ペア = per-item 混在の裁定送り） */
+interface GroundDecl { axes: [string, string]; note: string }
 
 /** セル値の指定: '*' 任意 / alt パラメタライズ（V1|V2）/ mixed 混在（V1+V2） */
 type CellSpec = { kind: 'any' } | { kind: 'alt'; values: string[] } | { kind: 'mixed'; values: string[] }
@@ -74,6 +82,7 @@ interface Model {
   dependent: DependentDecl[]
   only: OnlyConstraint[]
   chains: Chain[]
+  ground: GroundDecl[]
 }
 
 // ---- エラー収集 ---------------------------------------------------------------
@@ -305,9 +314,9 @@ function parseCellSpec(v: unknown, ctx: string): CellSpec {
 
 function buildModel(raw: unknown): Model {
   const r = asRecord(raw)
-  const known = new Set(['axes', 'observations', 'modifiers', 'orthogonal', 'orthogonal_groups', 'dependent', 'only', 'chains'])
+  const known = new Set(['axes', 'observations', 'modifiers', 'orthogonal', 'orthogonal_groups', 'dependent', 'only', 'chains', 'ground'])
   for (const key of Object.keys(r)) {
-    if (!known.has(key)) fail(`未知のトップレベルキー: ${key}（語彙は 7 種固定 — integration-design 参照）`)
+    if (!known.has(key)) fail(`未知のトップレベルキー: ${key}（語彙は固定 — appendix-state-model.md 参照）`)
   }
 
   const axes: Axis[] = Object.entries(asRecord(r.axes)).map(([id, def]) => {
@@ -370,8 +379,14 @@ function buildModel(raw: unknown): Model {
     const d = asRecord(o)
     return { from: asString(d.from, `chains[${i}].from`), to: asString(d.to, `chains[${i}].to`), note: asString(d.note, `chains[${i}].note`) }
   })
+  const ground: GroundDecl[] = asArray(r.ground).map((o, i) => {
+    const d = asRecord(o)
+    const pair = asStringArray(d.axes, `ground[${i}].axes`)
+    if (pair.length !== 2) fail(`ground[${i}]: axes は 2 要素（自己ペア = per-item 混在の裁定送り）`)
+    return { axes: [pair[0] ?? '', pair[1] ?? ''], note: asString(d.note, `ground[${i}].note`) }
+  })
 
-  return { axes, observations, modifiers, orthogonal, orthogonalGroups, dependent, only, chains }
+  return { axes, observations, modifiers, orthogonal, orthogonalGroups, dependent, only, chains, ground }
 }
 
 const model = buildModel(parseYamlSubset(block.body, block.startLine))
@@ -403,6 +418,12 @@ for (const d of model.orthogonal) {
   if (d.axes[1] !== '*') checkAxisRef(d.axes[1], 'orthogonal.axes')
 }
 for (const g of model.orthogonalGroups) for (const a of g.group) checkAxisRef(a, 'orthogonal_groups.group')
+for (const g of model.ground) {
+  for (const a of g.axes) checkAxisRef(a, `ground(${g.note})`)
+  const self = g.axes[0] === g.axes[1]
+  if (self && axisById.get(g.axes[0]) && !axisById.get(g.axes[0])!.perItem)
+    fail(`ground(${g.note}): 自己ペアは per-item 混在の裁定送り — ${g.axes[0]} は per_item でない`)
+}
 for (const d of model.dependent) {
   for (const [axisId, spec] of Object.entries(d.cells)) {
     const axis = checkAxisRef(axisId, `dependent(${d.note})`)
@@ -625,6 +646,8 @@ for (const only of model.only) {
   for (const req of Object.keys(only.requires))
     classified.set(pairKey(only.axis, req), `制約: ${only.note}`)
 }
+// ground 送りペアも「裁定済み」扱い（裁定の中身は ground 工程に委譲 — 別枠でレポート）
+for (const g of model.ground) classified.set(pairKey(g.axes[0], g.axes[1]), `ground送り: ${g.note}`)
 
 for (let i = 0; i < model.axes.length; i++) {
   for (let j = i + 1; j < model.axes.length; j++) {
@@ -688,7 +711,9 @@ for (const axis of model.axes.filter(a => a.perItem)) {
   const mixDeclared =
     // 自己ペア直交宣言 = 「混在しても値ごとに独立で合成挙動なし」の裁定
     model.orthogonal.some(d => d.axes[0] === axis.id && d.axes[1] === axis.id) ||
-    model.dependent.some(d => d.cells[axis.id]?.kind === 'mixed')
+    model.dependent.some(d => d.cells[axis.id]?.kind === 'mixed') ||
+    // ground 自己ペア = 混在の裁定を ground に送った（別枠でレポート）
+    model.ground.some(g => g.axes[0] === axis.id && g.axes[1] === axis.id)
   const mixCovered = covers.some(c => c.cells[axis.id]?.kind === 'mixed')
   if (!mixDeclared && !mixCovered) {
     findings.push({
@@ -699,14 +724,17 @@ for (const axis of model.axes.filter(a => a.perItem)) {
   }
 }
 
-// ---- 検査 8: base 推定 ---------------------------------------------------------
+// ---- ground 送り項目（指摘とは別枠） -------------------------------------------
 
+const groundItems: string[] = []
+for (const g of model.ground) {
+  groundItems.push(g.axes[0] === g.axes[1]
+    ? `per-item 混在の裁定: 軸 ${g.axes[0]} — ${g.note}`
+    : `ペア裁定: ${g.axes[0]} × ${g.axes[1]}（直交か依存か）— ${g.note}`)
+}
 for (const axis of model.axes.filter(a => a.baseInferred)) {
-  findings.push({
-    check: '8:base推定',
-    detail: `軸 ${axis.id}（${axis.label}）の base ${axis.base} は推定 — 基準シナリオが軸を明言していない。` +
-      `基準シナリオに明言して ? を外すか、ground の確認項目にする`,
-  })
+  groundItems.push(`base 確定: 軸 ${axis.id}（${axis.label}）の base ${axis.base} は推定 — ` +
+    `基準シナリオに明言して ? を外すか、コードで確認して確定する`)
 }
 
 // ---- レポート ------------------------------------------------------------------
@@ -725,8 +753,16 @@ if (hardErrors > 0) {
   process.exit(2)
 }
 
+if (groundItems.length > 0) {
+  console.log(`## ground 送り（確認項目 ${groundItems.length} 件 — fix は通過可 / gate では残存を裁定）`)
+  for (const item of groundItems) console.log(`- ${item}`)
+  console.log('')
+}
+
 if (findings.length === 0) {
-  console.log('指摘なし — 全検査グリーン')
+  console.log(groundItems.length === 0
+    ? '指摘なし — 全検査グリーン'
+    : `指摘なし — グリーン（ground 送り ${groundItems.length} 件あり）`)
 } else {
   const byCheck = new Map<string, Finding[]>()
   for (const f of findings) {

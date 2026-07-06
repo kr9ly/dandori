@@ -35,6 +35,10 @@ spec.md の全 B 行について、以下の表を **`.dandori/specs/<feature>/t
   緑の結果だけでは根拠にならない（詳細: `docs/appendix-formal.md`）
 - `visual` は可能ならレイアウト検証ツール等で確認し、根拠を記録する
 - `manual` はユーザー向けの確認手順（操作列と期待結果）を B 行から生成して提示する
+- spec.md に状態モデル（`dandori-state-model` ブロック）があれば、**チェッカーを再実行する**
+  （`node <dandori-repo>/skills/dandori-spec/scripts/check-state-model.ts <spec.md>`）。
+  impl 中の B 行増減後のカバレッジを再検証するため。指摘（exit 1/2）は ❌ 相当、
+  **ground 送り項目の残存は ⚠️ 相当**として trace.md に行を足し、§3 の裁定対象に含める
 
 ### 2. manual 項目のユーザー確認
 
