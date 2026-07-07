@@ -175,7 +175,7 @@ export const model: Model = {
     },
     {
       cells: { quantity: 'multi', set_item: 'present' },
-      note: 'B-32: quantity≥2 × セット展開で set_parent_product の誤リンクが発生（旧実装 バグ忠実再現）',
+      note: 'B-32: quantity≥2 × セット展開で set_parent_product の誤リンクが発生（旧実装バグ忠実再現）',
       addedBy: 'R1',
     },
     {
@@ -200,7 +200,7 @@ export const model: Model = {
     },
     {
       cells: { sale: 'noninteger_discount', wms: 'a2_maintenance' },
-      note: 'B-36 parameterize: 非整数割引 × WMS 503 → throw（旧実装 も金額計算に到達し500）',
+      note: 'B-36 parameterize: 非整数割引 × WMS 503 → throw（旧実装も金額計算に到達し500）',
       addedBy: 'R6',
     },
     {
