@@ -49,6 +49,17 @@
  *                 または 3 ラウンド以上連続で blocker+major 件数が減っていない
  *     継続 = どちらでもない
  *
+ * state モード — state.yaml の整合検査（ルーターの再開判定の足場）:
+ *   Y1. 語彙・形式 — course / phase / 各工程 status の語彙、数値フィールド、
+ *       updated の日付形式、未知のキー
+ *   Y2. feature 一致 — feature がフィーチャーディレクトリ名と一致するか
+ *   Y3. フェーズ整合 — phase が phases_done と矛盾しない / 短縮コースに存在しない
+ *       工程が記録されていない / 完了済み工程の status・カウンタが完了状態か
+ *       （例: phases_done に impl があるのに milestones_done < total）
+ *   Y4. 成果物整合 — フェーズが前提とするドキュメント（spec.md / design.md / plan.md /
+ *       review-ledger.md）の存在。phase: done では逆に使い捨てドキュメントの処分漏れを
+ *       検出する（アーカイブ方針で意図的に残す場合は無視してよい）
+ *
  * map モード — survey 成果物（.dandori/map/*.md）の証拠アンカー死活検査:
  *   dandori-survey verify の手順 1〜2（hash 比較 → 変更ファイル取得 → アンカー走査）を
  *   機械化する。腐った主張の裁定・修正は verify 工程（ユーザー裁定）に残る。
@@ -78,6 +89,7 @@
  *   node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...>
  *   node check-docs.ts ledger <review-ledger.md>
  *   node check-docs.ts map <mapファイル.md...>（アンカーは map の git リポジトリルート相対）
+ *   node check-docs.ts state <state.yaml>
  *
  * 終了コード: 0 = 全検査グリーン / 1 = 指摘あり / 2 = パース・形式エラー
  */
@@ -235,9 +247,11 @@ const USAGE =
   '       node check-docs.ts design <spec.md> <design.md>\n' +
   '       node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...>\n' +
   '       node check-docs.ts ledger <review-ledger.md>\n' +
-  '       node check-docs.ts map <mapファイル.md...>'
+  '       node check-docs.ts map <mapファイル.md...>\n' +
+  '       node check-docs.ts state <state.yaml>'
 
-if (mode !== 'spec' && mode !== 'plan' && mode !== 'design' && mode !== 'trace' && mode !== 'ledger' && mode !== 'map') {
+const MODES = ['spec', 'plan', 'design', 'trace', 'ledger', 'map', 'state']
+if (!MODES.includes(mode)) {
   console.error(USAGE)
   process.exit(2)
 }
@@ -770,6 +784,173 @@ if (mode === 'ledger') {
     console.log('')
   }
 
+  finishReport()
+}
+
+// ---- state モード -----------------------------------------------------------------
+
+if (mode === 'state') {
+  const paths = argvRest.slice(1)
+  if (paths.length !== 1 || paths[0].startsWith('--')) { console.error(USAGE); process.exit(2) }
+  const statePath = paths[0]
+  const lines = readLines(statePath, 'state.yaml')
+
+  // state.yaml 用ミニパーサ（トップレベル + 1 段ネストのみ — 正準形式が要求する範囲）
+  function stripComment(line: string): string {
+    const i = line.search(/(^|\s)#/)
+    return i === -1 ? line : line.slice(0, i)
+  }
+  const top: Record<string, string | Record<string, string>> = {}
+  let curKey: string | null = null
+  lines.forEach((raw, idx) => {
+    const line = stripComment(raw)
+    if (line.trim() === '') return
+    const indent = line.length - line.trimStart().length
+    const m = line.trim().match(/^([\w-]+):\s*(.*)$/)
+    if (!m) { fail(`${statePath} L${idx + 1}: 解釈できない行: ${raw.trim()}`); return }
+    const [, key, value] = m
+    if (indent === 0) {
+      if (value === '') { top[key] = {}; curKey = key }
+      else { top[key] = value.trim(); curKey = null }
+    } else if (curKey !== null && typeof top[curKey] === 'object') {
+      ;(top[curKey] as Record<string, string>)[key] = value.trim()
+    } else {
+      fail(`${statePath} L${idx + 1}: ネストの親キーがない: ${raw.trim()}`)
+    }
+  })
+
+  const FULL_ORDER = ['spec', 'ground', 'review', 'spike', 'plan', 'impl', 'codereview', 'refine', 'gate']
+  const SHORT_PHASES = new Set(['spec', 'impl', 'codereview', 'refine', 'gate']) // codereview/refine は短縮でも任意実施可
+  const PHASE_VOCAB = new Set([...FULL_ORDER, 'done'])
+
+  const str = (v: unknown): string | null => typeof v === 'string' ? v : null
+  const section = (k: string): Record<string, string> =>
+    typeof top[k] === 'object' ? top[k] as Record<string, string> : {}
+
+  // Y1: 語彙・形式
+  const KNOWN_TOP = new Set(['feature', 'course', 'phase', 'phases_done', 'review', 'spike', 'impl', 'codereview', 'refine', 'progress', 'updated'])
+  for (const k of Object.keys(top)) {
+    if (!KNOWN_TOP.has(k)) findings.push({ check: 'Y1:語彙・形式', detail: `未知のトップレベルキー: ${k}（正準定義は dandori ルーターの SKILL.md）` })
+  }
+  const course = str(top.course)
+  if (course !== null && course !== 'full' && course !== 'short') {
+    findings.push({ check: 'Y1:語彙・形式', detail: `course「${course}」は語彙外 — full / short` })
+  }
+  const phase = str(top.phase)
+  if (phase === null) findings.push({ check: 'Y1:語彙・形式', detail: 'phase がない' })
+  else if (!PHASE_VOCAB.has(phase)) findings.push({ check: 'Y1:語彙・形式', detail: `phase「${phase}」は語彙外` })
+  const doneRaw = str(top.phases_done) ?? ''
+  const phasesDone = doneRaw.replace(/^\[|\]$/g, '').split(',').map(s => s.trim()).filter(s => s !== '')
+  for (const p of phasesDone) {
+    if (!FULL_ORDER.includes(p)) findings.push({ check: 'Y1:語彙・形式', detail: `phases_done の「${p}」は語彙外` })
+  }
+  const STATUS_VOCAB: Record<string, Set<string>> = {
+    review: new Set(['in_progress', 'passed', 'escalated']),
+    spike: new Set(['pending', 'done', 'skipped']),
+    codereview: new Set(['in_progress', 'passed', 'escalated', 'skipped']),
+    refine: new Set(['pending', 'done', 'skipped']),
+  }
+  for (const [sec, vocab] of Object.entries(STATUS_VOCAB)) {
+    const s = section(sec).status
+    if (s !== undefined && !vocab.has(s)) {
+      findings.push({ check: 'Y1:語彙・形式', detail: `${sec}.status「${s}」は語彙外 — ${[...vocab].join(' / ')}` })
+    }
+  }
+  const numeric = (sec: string, key: string): number | null => {
+    const v = section(sec)[key]
+    if (v === undefined) return null
+    if (!/^\d+$/.test(v)) {
+      findings.push({ check: 'Y1:語彙・形式', detail: `${sec}.${key}「${v}」が非負整数でない` })
+      return null
+    }
+    return Number(v)
+  }
+  const rounds = numeric('review', 'rounds')
+  numeric('codereview', 'rounds')
+  const mDone = numeric('impl', 'milestones_done')
+  const mTotal = numeric('impl', 'milestones_total')
+  numeric('refine', 'applied')
+  numeric('refine', 'rejected')
+  const updated = str(top.updated)
+  if (updated !== null && !/^\d{4}-\d{2}-\d{2}$/.test(updated)) {
+    findings.push({ check: 'Y1:語彙・形式', detail: `updated「${updated}」が YYYY-MM-DD 形式でない` })
+  }
+
+  // Y2: feature ↔ ディレクトリ名
+  const feature = str(top.feature)
+  const dirName = dirname(resolve(statePath)).split('/').pop() ?? ''
+  if (feature !== null && feature !== dirName) {
+    findings.push({ check: 'Y2:feature一致', detail: `feature「${feature}」がディレクトリ名「${dirName}」と一致しない` })
+  }
+
+  // Y3: フェーズ整合
+  if (phase !== null && phase !== 'done' && phasesDone.includes(phase)) {
+    findings.push({ check: 'Y3:フェーズ整合', detail: `phase「${phase}」が phases_done に入っている — 完了済みなら phase を次工程へ進める` })
+  }
+  if (phase === 'done' && !phasesDone.includes('gate')) {
+    findings.push({ check: 'Y3:フェーズ整合', detail: 'phase: done なのに phases_done に gate がない — gate を通らずに done にはならない' })
+  }
+  if (course === 'short') {
+    for (const p of [phase, ...phasesDone]) {
+      if (p !== null && p !== 'done' && !SHORT_PHASES.has(p)) {
+        findings.push({ check: 'Y3:フェーズ整合', detail: `短縮コースに工程「${p}」は存在しない（spec → impl → gate — codereview / refine は任意実施のみ）` })
+      }
+    }
+  }
+  if (phasesDone.includes('impl') && mDone !== null && mTotal !== null && mDone < mTotal) {
+    findings.push({ check: 'Y3:フェーズ整合', detail: `phases_done に impl があるのに milestones ${mDone}/${mTotal} — 全マイルストーン完了が impl の完了条件` })
+  }
+  if (mDone !== null && mTotal !== null && mDone > mTotal) {
+    findings.push({ check: 'Y3:フェーズ整合', detail: `milestones_done（${mDone}）が milestones_total（${mTotal}）を超えている` })
+  }
+  const doneNeedsStatus: [string, string[]][] = [
+    ['review', ['passed', 'escalated']],
+    ['spike', ['done', 'skipped']],
+    ['codereview', ['passed', 'escalated', 'skipped']],
+    ['refine', ['done', 'skipped']],
+  ]
+  for (const [sec, ok] of doneNeedsStatus) {
+    const s = section(sec).status
+    if (phasesDone.includes(sec) && s !== undefined && !ok.includes(s)) {
+      findings.push({ check: 'Y3:フェーズ整合', detail: `phases_done に ${sec} があるのに ${sec}.status が「${s}」 — 完了状態（${ok.join(' / ')}）でない` })
+    }
+  }
+  if (rounds !== null && rounds >= 1 && phase !== null && FULL_ORDER.indexOf(phase) < FULL_ORDER.indexOf('review') && !phasesDone.includes('review')) {
+    // review 実施済みなのに phase が review より前 = 逆行。逆行自体は正当だが phases_done から外した記録が必要
+    findings.push({ check: 'Y3:フェーズ整合', detail: `review.rounds が ${rounds} なのに phase「${phase}」が review より前 — 逆行なら理由を design.md の発見ログに記録する（この指摘は記録済みなら無視してよい）` })
+  }
+
+  // Y4: 成果物整合
+  const featureDir = dirname(resolve(statePath))
+  const exists = (name: string): boolean => {
+    try { statSync(join(featureDir, name)); return true } catch { return false }
+  }
+  if (phase !== 'done') {
+    const needs: [string, string, string][] = [
+      ['spec', 'spec.md', 'spec 完了の成果物'],
+      ['ground', 'design.md', 'ground 完了の成果物'],
+      ['plan', 'plan.md', 'plan 完了の成果物'],
+      ['review', 'review-ledger.md', 'review 完了なら台帳が残っているはず'],
+    ]
+    for (const [p, file, why] of needs) {
+      if (phasesDone.includes(p) && !exists(file)) {
+        findings.push({ check: 'Y4:成果物整合', detail: `phases_done に ${p} があるのに ${file} がない（${why}）` })
+      }
+    }
+  } else {
+    if (!exists('spec.md')) {
+      findings.push({ check: 'Y4:成果物整合', detail: 'phase: done なのに spec.md がない — spec.md は長寿命ドキュメントとして残す' })
+    }
+    for (const file of ['plan.md', 'trace.md', 'review-ledger.md']) {
+      if (exists(file)) {
+        findings.push({ check: 'Y4:成果物整合', detail: `phase: done なのに ${file} が残っている — クローズ手順の処分漏れの疑い（アーカイブ方針で意図的に残すなら無視してよい）` })
+      }
+    }
+  }
+
+  console.log(`# state.yaml 整合検査レポート — ${statePath}`)
+  console.log(`feature: ${feature ?? '（なし）'} / course: ${course ?? '（なし）'} / phase: ${phase ?? '（なし）'} / phases_done: [${phasesDone.join(', ')}]`)
+  console.log('')
   finishReport()
 }
 
