@@ -25,11 +25,30 @@
  *   P3. 削除済み参照 — 取り消し線つき B 行への参照
  *   P4. 空マイルストーン — 対応 B 行がゼロのマイルストーン（スコープ外の作業）
  *
+ * design モード — design.md の形式検査と spec.md との B 行対応突合:
+ *   D1. 必須セクション欠落 — 土台 / 改変箇所 / 新規実装 / 不変条件 /
+ *       リスクランキング / 発見ログ（見出しの（）補足は無視して前方一致）
+ *   D2. 検証マーク — 土台の各エントリに [実行検証済] / [読解のみ] が付いているか。
+ *       [実行検証済] は再実行可能な証拠形式（バッククォートのコマンド併記）を要求
+ *   D3. B 行参照整合 — 土台/改変箇所/新規実装が参照する B-ID の幽霊・削除済み検出
+ *   D4. 未対応 B 行 — spec の B 行が土台/改変/新規のどこにも対応しない
+ *       （spec か調査のどちらかに穴 — ground の完了条件）
+ *
+ * trace モード — gate の初期トレース表生成（B-ID ↔ テストコードの機械突合）:
+ *   spec の B-ID をテストファイルから grep し、トレース表の叩き台（Markdown）を出力する。
+ *   impl の規約（テスト名に B-ID を含める）が前提。表の「状態」は実行前の初期値 —
+ *   ゲート工程がテストを再実行して ✅/❌ に更新する。
+ *   T1. 対応テストなし — unit / e2e / formal の B 行に B-ID の grep ヒットがない（⚠️ 候補）
+ *   T2. 幽霊 B-ID — テストコード中の B-ID が spec に存在しない
+ *   T3. 削除済み参照 — 削除済み B 行の B-ID を参照するテスト
+ *
  * 実行:
  *   node check-docs.ts spec <spec.md>
  *   node check-docs.ts spec <spec.md> --baseline <旧spec.md>
  *     （fix 済み spec を再編集したとき: git show HEAD:<path> > /tmp/base.md で取り出す）
  *   node check-docs.ts plan <spec.md> <plan.md>
+ *   node check-docs.ts design <spec.md> <design.md>
+ *   node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...>
  *
  * 終了コード: 0 = 全検査グリーン / 1 = 指摘あり / 2 = パース・形式エラー
  */
@@ -38,7 +57,13 @@
 declare const process: { argv: string[]; exit(code: number): never }
 
 // @ts-ignore -- 依存なし実行のため @types/node を入れていない
-const { readFileSync } = await import('node:fs') as { readFileSync(path: string, enc: string): string }
+const { readFileSync, readdirSync, statSync } = await import('node:fs') as {
+  readFileSync(path: string, enc: string): string
+  readdirSync(path: string): string[]
+  statSync(path: string): { isDirectory(): boolean; size: number }
+}
+// @ts-ignore -- 同上
+const { join } = await import('node:path') as { join(...p: string[]): string }
 
 // ---- 共通 ----------------------------------------------------------------------
 
@@ -169,9 +194,11 @@ const argvRest = process.argv.slice(2)
 const mode = argvRest[0]
 const USAGE =
   'usage: node check-docs.ts spec <spec.md> [--baseline <旧spec.md>]\n' +
-  '       node check-docs.ts plan <spec.md> <plan.md>'
+  '       node check-docs.ts plan <spec.md> <plan.md>\n' +
+  '       node check-docs.ts design <spec.md> <design.md>\n' +
+  '       node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...>'
 
-if (mode !== 'spec' && mode !== 'plan') {
+if (mode !== 'spec' && mode !== 'plan' && mode !== 'design' && mode !== 'trace') {
   console.error(USAGE)
   process.exit(2)
 }
@@ -330,7 +357,7 @@ if (mode === 'spec') {
 
 // ---- plan モード ------------------------------------------------------------------
 
-{
+if (mode === 'plan') {
   const paths = argvRest.slice(1)
   if (paths.length !== 2 || paths.some(p => p.startsWith('--'))) { console.error(USAGE); process.exit(2) }
   const [specPath, planPath] = paths
@@ -437,6 +464,218 @@ if (mode === 'spec') {
   console.log(`B 行 ${liveCount}（削除済み除く） / カバー済み ${coveredCount} / マイルストーン ${milestones.size}` +
     `（${[...milestones.keys()].join(', ')}）`)
   console.log('')
+  finishReport()
+}
+
+// ---- design モード ----------------------------------------------------------------
+
+if (mode === 'design') {
+  const paths = argvRest.slice(1)
+  if (paths.length !== 2 || paths.some(p => p.startsWith('--'))) { console.error(USAGE); process.exit(2) }
+  const [specPath, designPath] = paths
+  const spec = parseSpec(readLines(specPath, 'spec'), specPath)
+  const designLines = readLines(designPath, 'design')
+
+  const specIds = new Set(spec.bs.flatMap(b => expandRange(b.id)))
+  const struckIds = new Set(spec.bs.filter(b => b.struck).flatMap(b => expandRange(b.id)))
+
+  // design.md のセクション走査。見出しの（）補足（例: 土台（利用する既存実装））は無視して
+  // 前方一致で正準セクション名に正規化する
+  function normalizeSection(name: string): string {
+    return name.split(/[（(]/)[0].trim()
+  }
+  interface DesignEntry { text: string; line: number }
+  const sections = new Map<string, DesignEntry[]>()
+  const sectionLines = new Map<string, number>()
+  let curSec: string | null = null
+  let inFence = false
+  designLines.forEach((line, idx) => {
+    if (/^```/.test(line.trim())) { inFence = !inFence; return }
+    if (inFence) return
+    const sec = line.match(/^##\s+(.+?)\s*$/)
+    if (sec) {
+      curSec = normalizeSection(sec[1])
+      if (sections.has(curSec)) {
+        findings.push({
+          check: 'D1:必須セクション',
+          detail: `## ${curSec} が複数ある（L${sectionLines.get(curSec)} と L${idx + 1}）`,
+        })
+      } else {
+        sections.set(curSec, [])
+        sectionLines.set(curSec, idx + 1)
+      }
+      return
+    }
+    // エントリはトップレベルの箇条書き（継続行・ネストはエントリ本体に含めない）
+    if (curSec && /^- /.test(line)) sections.get(curSec)!.push({ text: line, line: idx + 1 })
+  })
+  if (inFence) fail(`${designPath}: fenced block が閉じていない`)
+
+  // D1: 必須セクション欠落
+  const REQUIRED = ['土台', '改変箇所', '新規実装', '不変条件', 'リスクランキング', '発見ログ']
+  for (const name of REQUIRED) {
+    if (!sections.has(name)) {
+      findings.push({ check: 'D1:必須セクション', detail: `## ${name} がない（正準定義 — 空でも見出しは置く）` })
+    }
+  }
+
+  // D2: 土台エントリの検証マーク
+  for (const e of sections.get('土台') ?? []) {
+    const mark = e.text.match(/\[(実行検証済|読解のみ)([:：]?)\s*([^\]]*)\]/)
+    if (!mark) {
+      findings.push({
+        check: 'D2:検証マーク',
+        detail: `土台エントリ (L${e.line}) に [実行検証済] / [読解のみ] マークがない: ${e.text.slice(0, 60)}`,
+      })
+      continue
+    }
+    if (mark[1] === '実行検証済') {
+      const payload = mark[3].trim()
+      if (payload === '' || !payload.includes('`')) {
+        findings.push({
+          check: 'D2:検証マーク',
+          detail: `土台エントリ (L${e.line}) の [実行検証済] に再実行可能な証拠がない — ` +
+            `実行コマンドをバッククォートで併記する（例: [実行検証済: \`npm test -- xx\` 12 passed — 観測要点]）`,
+        })
+      }
+    }
+  }
+
+  // D3 / D4: B 行参照の突合（土台・改変箇所・新規実装が参照源）
+  const refSections = ['土台', '改変箇所', '新規実装']
+  const referenced = new Set<string>()
+  for (const secName of refSections) {
+    for (const e of sections.get(secName) ?? []) {
+      for (const tok of e.text.match(/B-[\w.()]+(?:〜B-[\w.()]+)?/g) ?? []) {
+        for (const id of expandRange(tok)) {
+          referenced.add(id)
+          if (!specIds.has(id)) {
+            findings.push({
+              check: 'D3:B行参照整合',
+              detail: `${secName} (L${e.line}) が参照する ${id} が spec にない — typo か spec の陳腐化`,
+            })
+          } else if (struckIds.has(id)) {
+            findings.push({
+              check: 'D3:B行参照整合',
+              detail: `${secName} (L${e.line}) が削除済み（取り消し線）の ${id} を参照している`,
+            })
+          }
+        }
+      }
+    }
+  }
+  for (const b of spec.bs.filter(b => !b.struck)) {
+    for (const id of expandRange(b.id)) {
+      if (!referenced.has(id)) {
+        findings.push({
+          check: 'D4:未対応B行',
+          detail: `${id}（${b.title}）が土台/改変箇所/新規実装のどこにも対応していない — spec か調査のどちらかに穴`,
+        })
+      }
+    }
+  }
+
+  console.log(`# design 検査レポート — ${specPath} ↔ ${designPath}`)
+  console.log(`セクション ${sections.size} / 土台エントリ ${(sections.get('土台') ?? []).length}` +
+    ` / B 行参照 ${referenced.size}`)
+  console.log('')
+  finishReport()
+}
+
+// ---- trace モード -----------------------------------------------------------------
+
+if (mode === 'trace') {
+  const paths = argvRest.slice(1)
+  if (paths.length < 2 || paths.some(p => p.startsWith('--'))) { console.error(USAGE); process.exit(2) }
+  const [specPath, ...scanRoots] = paths
+  const spec = parseSpec(readLines(specPath, 'spec'), specPath)
+
+  const specIds = new Set(spec.bs.flatMap(b => expandRange(b.id)))
+  const struckIds = new Set(spec.bs.filter(b => b.struck).flatMap(b => expandRange(b.id)))
+
+  // テストファイル走査。B-ID はトークン単位で完全一致（B-1 が B-12 に誤マッチしない）
+  const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', 'vendor', 'target', '.dandori'])
+  const MAX_FILE_SIZE = 1024 * 1024
+  const hits = new Map<string, string[]>() // B-ID → "file:line" の一覧
+  let scannedFiles = 0
+
+  function scanFile(path: string): void {
+    let text: string
+    try { text = readFileSync(path, 'utf-8') } catch { return }
+    if (text.includes('\u0000')) return // バイナリ
+    scannedFiles++
+    text.split('\n').forEach((line, idx) => {
+      for (const raw of line.match(/B-[\w.()]+/g) ?? []) {
+        const id = raw.replace(/[.)]+$/, '') // 文末の句読点由来のゴミを除去
+        if (!hits.has(id)) hits.set(id, [])
+        const list = hits.get(id)!
+        if (list.length < 5) list.push(`${path}:${idx + 1}`) // 根拠は 5 件で打ち切り
+      }
+    })
+  }
+  function walk(path: string): void {
+    let st: { isDirectory(): boolean; size: number }
+    try { st = statSync(path) } catch {
+      console.error(`走査対象を読めない: ${path}`)
+      process.exit(2)
+    }
+    if (st.isDirectory()) {
+      for (const name of readdirSync(path)) {
+        if (SKIP_DIRS.has(name)) continue
+        walk(join(path, name))
+      }
+    } else if (st.size <= MAX_FILE_SIZE) {
+      scanFile(path)
+    }
+  }
+  for (const root of scanRoots) walk(root)
+
+  // トレース表の叩き台（unit/e2e/formal はテスト対応が必要。visual/manual は最終ゲートで確認）
+  const NEEDS_TEST = new Set(['unit', 'e2e', 'formal'])
+  console.log(`# 初期トレース表 — ${specPath}`)
+  console.log(`走査: ${scanRoots.join(', ')}（${scannedFiles} ファイル）`)
+  console.log('状態は実行前の初期値 — ゲート工程がテストを再実行して更新する')
+  console.log('')
+  console.log('| B 行 | ゲート | 状態 | 根拠 |')
+  console.log('|------|--------|------|------|')
+  for (const b of spec.bs.filter(b => !b.struck)) {
+    const tags = (b.gateRaw ?? '').split(/[,、/\s]+/).filter(t => t !== '')
+    const gate = tags.join(', ') || '（Gate なし）'
+    const found = expandRange(b.id).flatMap(id => hits.get(id) ?? [])
+    if (tags.some(t => NEEDS_TEST.has(t))) {
+      if (found.length > 0) {
+        console.log(`| ${b.id} | ${gate} | ⏳ 要再実行 | ${found.join(', ')} |`)
+      } else {
+        console.log(`| ${b.id} | ${gate} | ⚠️ 未検証候補 | B-ID の grep ヒットなし |`)
+        findings.push({
+          check: 'T1:対応テストなし',
+          detail: `${b.id}（${b.title} / ${gate}）に対応するテストが grep で見つからない — ` +
+            `テスト追加か、推測でない対応理由の明記か、manual への降格裁定`,
+        })
+      }
+    } else if (tags.includes('manual')) {
+      console.log(`| ${b.id} | ${gate} | ⏳ ユーザー確認待ち | 確認手順を B 行から生成する |`)
+    } else {
+      console.log(`| ${b.id} | ${gate} | ⏳ 要確認 | ${found.length > 0 ? found.join(', ') : '—'} |`)
+    }
+  }
+  console.log('')
+
+  // T2 / T3: テスト側の幽霊・削除済み B-ID
+  for (const [id, locs] of [...hits.entries()].sort()) {
+    if (struckIds.has(id)) {
+      findings.push({
+        check: 'T3:削除済み参照',
+        detail: `削除済み（取り消し線）の ${id} を参照するテストがある: ${locs.join(', ')}`,
+      })
+    } else if (!specIds.has(id)) {
+      findings.push({
+        check: 'T2:幽霊B-ID',
+        detail: `テストコード中の ${id} が spec にない（typo か spec の陳腐化）: ${locs.join(', ')}`,
+      })
+    }
+  }
+
   finishReport()
 }
 
