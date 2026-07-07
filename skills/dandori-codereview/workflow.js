@@ -123,9 +123,10 @@ const FIX_SCHEMA = {
 
 const JUDGE_SCHEMA = {
   type: 'object',
-  required: ['verdict'],
+  required: ['verdict', 'exit_code'],
   properties: {
     verdict: { type: 'string', enum: ['passed', 'escalated', 'continue'] },
+    exit_code: { type: 'integer', description: 'コマンドの exit code（0 = 形式指摘なし）' },
     notes: { type: 'string', description: '再燃・停滞・形式指摘があればその内容' },
   },
 }
@@ -267,7 +268,7 @@ ${JSON.stringify(survivors.map(s => ({ id: s.id, severity: s.severity, lane: s.l
 - 完了時に以下のゲートを自分で実行し、緑になるまで修正すること。生の出力の要点を gate_output で報告すること:
 ${GATES.map(g => `  - ${g}`).join('\n')}`
 
-const judgePrompt = `次のコマンドを実行し、出力を報告してください:
+const judgePrompt = `次のコマンドを実行し、出力とコマンドの exit code を報告してください:
 ${CHECK} ledger ${LEDGER}
 
 出力の「C（dandori-codereview）」節の判定を verdict に対応づける:
@@ -425,9 +426,11 @@ while (true) {
     if (cRowsExist) {
       judge = await agent(judgePrompt, { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
     }
-    const escalated = judge && judge.verdict === 'escalated'
+    // 完了条件は check-docs の exit 0（形式不備なし）まで含む — 未処置行や欠番を残して
+    // passed を名乗らない
+    const clean = !judge || (judge.verdict !== 'escalated' && judge.exit_code === 0)
     return {
-      status: escalated ? 'escalated' : 'passed',
+      status: clean ? 'passed' : 'escalated',
       rounds: round - startRound + 1,
       lastRound: round,
       minors,
