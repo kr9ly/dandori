@@ -30,6 +30,10 @@ spec.md の全 B 行について、以下の表を **`.dandori/specs/<feature>/t
 - `unit`/`e2e` は**このゲートで再実行する**。impl / codereview 中の通過報告を根拠に流用しない。
   実行コマンドは plan.md の割り当てを使い、`.dandori/resources.md`（リソースマップ）に
   正準コマンドの定義があればそちらを優先する
+- B 行↔テストの対応付けは、まず **B-ID をテストコードから grep** して機械的に列挙する
+  （impl の規約でテスト名に B-ID が入っている）。grep で対応テストが見つからない
+  `unit`/`e2e` 行は ⚠️ 候補 — 「たぶんこのテストが該当」という推測での対応付けは、
+  根拠欄にテスト名と B 行の対応理由を明記した場合のみ許す（黙って埋めない）
 - `formal` はプロパティベーステスト（+ ソルバー検証があればそれも）を再実行し、
   **broken-variant（わざと壊した実装）が赤になることの確認記録**を根拠欄に残す。
   緑の結果だけでは根拠にならない（詳細: `docs/appendix-formal.md`）
@@ -77,7 +81,7 @@ spec.md の全 B 行について、以下の表を **`.dandori/specs/<feature>/t
    既存理解の訂正）の map への昇格。昇格元は次のステップで処分されるため、
    **必ず処分より前に**実行する。状態マップがあれば、design.md の「共有状態への影響」で
    宣言した writers/readers の増減を states.md に反映するのも update の一部
-2. plan.md と trace.md は役目を終える（削除 or アーカイブ。リポジトリ方針に従う）
+2. plan.md・trace.md・review-ledger.md は役目を終える（削除 or アーカイブ。リポジトリ方針に従う）
 3. design.md は発見ログの spec 還流（§3）を済ませた上で同様に処分してよい
 4. spec.md は長寿命ドキュメントとして残す
 5. state.yaml: `phase: done`
