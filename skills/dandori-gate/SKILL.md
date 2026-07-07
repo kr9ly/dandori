@@ -27,7 +27,7 @@ spec.md の全 B 行について、以下の表を **`.dandori/specs/<feature>/t
 | B-5 | unit | ⚠️ 未検証 | 対応テストが存在しない |
 ```
 
-- `unit`/`e2e` は**このゲートで再実行する**。impl / codereview 中の通過報告を根拠に流用しない。
+- `unit`/`e2e` は**このゲートで再実行する**。impl / codereview / refine 中の通過報告を根拠に流用しない。
   実行コマンドは plan.md の割り当てを使い、`.dandori/resources.md`（リソースマップ）に
   正準コマンドの定義があればそちらを優先する
 - B 行↔テストの対応付けは、まず **B-ID をテストコードから grep** して機械的に列挙する
