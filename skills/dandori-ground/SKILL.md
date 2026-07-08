@@ -26,6 +26,11 @@ spec.md の各 B 行に対して:
 `.dandori/resources.md`（リソースマップ）があれば先に読み、アーキテクチャ・設計
 ドキュメントを調査の起点に、規約類を不変条件の候補源にする。
 
+sketch.md があるフィーチャー（UI タスク）では、変更マップの `不可侵` 領域を
+不変条件の候補源にする — 各領域を描画するコード（コンポーネント・スタイル・
+レイアウト定義）を特定し、「画面の不変条件」を「コードの不変条件」として
+design.md に接地する（⚠ 付き領域は特定を省略しない）。
+
 **状態モデルの ground 送り項目の消化**: spec.md に状態モデル
 （`dandori-state-model` ブロック）がある場合、チェッカー
 （`node <dandori-repo>/skills/dandori-spec/scripts/check-state-model.ts <spec.md>`）を実行し、

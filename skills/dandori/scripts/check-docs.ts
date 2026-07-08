@@ -821,8 +821,8 @@ if (mode === 'state') {
     }
   })
 
-  const FULL_ORDER = ['spec', 'ground', 'review', 'spike', 'plan', 'impl', 'codereview', 'refine', 'gate']
-  const SHORT_PHASES = new Set(['spec', 'impl', 'codereview', 'refine', 'gate']) // codereview/refine は短縮でも任意実施可
+  const FULL_ORDER = ['spec', 'sketch', 'ground', 'review', 'spike', 'plan', 'impl', 'codereview', 'refine', 'gate']
+  const SHORT_PHASES = new Set(['spec', 'sketch', 'impl', 'codereview', 'refine', 'gate']) // sketch/codereview/refine は短縮でも任意実施可
   const PHASE_VOCAB = new Set([...FULL_ORDER, 'done'])
 
   const str = (v: unknown): string | null => typeof v === 'string' ? v : null
@@ -830,7 +830,7 @@ if (mode === 'state') {
     typeof top[k] === 'object' ? top[k] as Record<string, string> : {}
 
   // Y1: 語彙・形式
-  const KNOWN_TOP = new Set(['feature', 'course', 'phase', 'phases_done', 'review', 'spike', 'impl', 'codereview', 'refine', 'progress', 'updated'])
+  const KNOWN_TOP = new Set(['feature', 'course', 'phase', 'phases_done', 'sketch', 'review', 'spike', 'impl', 'codereview', 'refine', 'progress', 'updated'])
   for (const k of Object.keys(top)) {
     if (!KNOWN_TOP.has(k)) findings.push({ check: 'Y1:語彙・形式', detail: `未知のトップレベルキー: ${k}（正準定義は dandori ルーターの SKILL.md）` })
   }
@@ -847,6 +847,7 @@ if (mode === 'state') {
     if (!FULL_ORDER.includes(p)) findings.push({ check: 'Y1:語彙・形式', detail: `phases_done の「${p}」は語彙外` })
   }
   const STATUS_VOCAB: Record<string, Set<string>> = {
+    sketch: new Set(['pending', 'done', 'skipped']),
     review: new Set(['in_progress', 'passed', 'escalated']),
     spike: new Set(['pending', 'done', 'skipped']),
     codereview: new Set(['in_progress', 'passed', 'escalated', 'skipped']),
@@ -895,7 +896,7 @@ if (mode === 'state') {
   if (course === 'short') {
     for (const p of [phase, ...phasesDone]) {
       if (p !== null && p !== 'done' && !SHORT_PHASES.has(p)) {
-        findings.push({ check: 'Y3:フェーズ整合', detail: `短縮コースに工程「${p}」は存在しない（spec → impl → gate — codereview / refine は任意実施のみ）` })
+        findings.push({ check: 'Y3:フェーズ整合', detail: `短縮コースに工程「${p}」は存在しない（spec → impl → gate — sketch / codereview / refine は任意実施のみ）` })
       }
     }
   }
@@ -906,6 +907,7 @@ if (mode === 'state') {
     findings.push({ check: 'Y3:フェーズ整合', detail: `milestones_done（${mDone}）が milestones_total（${mTotal}）を超えている` })
   }
   const doneNeedsStatus: [string, string[]][] = [
+    ['sketch', ['done', 'skipped']],
     ['review', ['passed', 'escalated']],
     ['spike', ['done', 'skipped']],
     ['codereview', ['passed', 'escalated', 'skipped']],
@@ -939,11 +941,15 @@ if (mode === 'state') {
         findings.push({ check: 'Y4:成果物整合', detail: `phases_done に ${p} があるのに ${file} がない（${why}）` })
       }
     }
+    // sketch は skipped でも phases_done に入りうるので、status が skipped でない場合のみ成果物を要求する
+    if (phasesDone.includes('sketch') && section('sketch').status !== 'skipped' && !exists('sketch.md')) {
+      findings.push({ check: 'Y4:成果物整合', detail: 'phases_done に sketch があるのに sketch.md がない（sketch 完了の成果物 — skipped なら sketch.status に記録する）' })
+    }
   } else {
     if (!exists('spec.md')) {
       findings.push({ check: 'Y4:成果物整合', detail: 'phase: done なのに spec.md がない — spec.md は長寿命ドキュメントとして残す' })
     }
-    for (const file of ['plan.md', 'trace.md', 'review-ledger.md']) {
+    for (const file of ['sketch.md', 'plan.md', 'trace.md', 'review-ledger.md']) {
       if (exists(file)) {
         findings.push({ check: 'Y4:成果物整合', detail: `phase: done なのに ${file} が残っている — クローズ手順の処分漏れの疑い（アーカイブ方針で意図的に残すなら無視してよい）` })
       }

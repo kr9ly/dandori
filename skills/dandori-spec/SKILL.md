@@ -193,4 +193,7 @@ dandori-impl へ直行する（マイルストーン1個の plan を暗黙生成
 - 全 B 行にゲートタグが付いている
 - フォーマット検査（`check-docs.ts spec`）が exit 0
 - 状態モデルを書いた spec: 状態モデルチェッカーが exit 0（ground 送り項目は残ってよい）
-- state.yaml: `phase: ground`（短縮コースは `phase: impl`）、`phases_done` に spec 追加
+- state.yaml: `phase: ground`（`sketch.status: pending` の UI タスクは `phase: sketch`、
+  短縮コースは `phase: impl`）、`phases_done` に spec 追加。visual/manual の B 行が
+  できたのに `sketch.status: skipped` のままなら、トリアージの判定ズレとして
+  sketch の要否をユーザーに再確認する

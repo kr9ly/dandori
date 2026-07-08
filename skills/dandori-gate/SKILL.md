@@ -42,6 +42,10 @@ spec.md の全 B 行について、以下の表を **`.dandori/specs/<feature>/t
   緑の結果だけでは根拠にならない（詳細: `docs/appendix-formal.md`）
 - `visual` は可能ならレイアウト検証ツール等で確認し、根拠を記録する
 - `manual` はユーザー向けの確認手順（操作列と期待結果）を B 行から生成して提示する
+- sketch.md があるフィーチャーでは、**不可侵領域ごとの「非変化確認」行を trace.md に
+  足す**（B 行とは別枠）。sketch.md の「不可侵領域の検証手段」に機械検証の宣言が
+  あれば実行して根拠を記録し、目視宣言なら確認手順を §2 のユーザー確認に回す。
+  ⚠ 付き（変更領域に隣接）の領域は目視でも省略不可
 - **plan カバレッジ検査を再実行する**
   （`node <dandori-repo>/skills/dandori/scripts/check-docs.ts plan <spec.md> <plan.md>`）。
   impl 中に B 行が増減していると plan 策定時の検査結果は古い — 未カバーの B 行
@@ -89,7 +93,7 @@ spec.md の全 B 行について、以下の表を **`.dandori/specs/<feature>/t
    既存理解の訂正）の map への昇格。昇格元は次のステップで処分されるため、
    **必ず処分より前に**実行する。状態マップがあれば、design.md の「共有状態への影響」で
    宣言した writers/readers の増減を states.md に反映するのも update の一部
-2. plan.md・trace.md・review-ledger.md は役目を終える（削除 or アーカイブ。リポジトリ方針に従う）
+2. sketch.md・plan.md・trace.md・review-ledger.md は役目を終える（削除 or アーカイブ。リポジトリ方針に従う）
 3. design.md は発見ログの spec 還流（§3）を済ませた上で同様に処分してよい
 4. spec.md は長寿命ドキュメントとして残す
 5. state.yaml: `phase: done`
