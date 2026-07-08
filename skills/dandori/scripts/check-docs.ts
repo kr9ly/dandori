@@ -91,6 +91,13 @@
  *   幽霊と誤検出しない）。括弧はバランスを保って正規化し（B-15(b) を壊さない）、
  *   spec にない括弧サフィックス付き ID はパラメタライズ表記として基底 B-ID に帰属させる
  *
+ * residue モード — dandori-cleanup のプロセス言及残存検査:
+ *   gate 通過後のクリーンアップで、フィーチャーのファイルからプロセス由来の言及が
+ *   除去しきれたかを機械確認する。`dandori-ok:` を含む行は裁定済みの機能的依存として除外。
+ *   RS1. B-ID トークン残存 — テスト名・コメント中の B-数字 トークン
+ *   RS2. dandori 言及残存 — dandori の文字列（.dandori/ パス参照を含む）
+ *   対象は今回のフィーチャーが触れたファイルに限ること（並行フィーチャーの B-ID は現役）
+ *
  * 実行:
  *   node check-docs.ts spec <spec.md>
  *   node check-docs.ts spec <spec.md> --baseline <旧spec.md>
@@ -101,6 +108,7 @@
  *   node check-docs.ts ledger <review-ledger.md>
  *   node check-docs.ts map <mapファイル.md...>（アンカーは map の git リポジトリルート相対）
  *   node check-docs.ts state <state.yaml>
+ *   node check-docs.ts residue <ファイル|ディレクトリ...>
  *
  * 終了コード: 0 = 全検査グリーン / 1 = 指摘あり / 2 = パース・形式エラー
  */
@@ -259,9 +267,10 @@ const USAGE =
   '       node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...>\n' +
   '       node check-docs.ts ledger <review-ledger.md>\n' +
   '       node check-docs.ts map <mapファイル.md...>\n' +
-  '       node check-docs.ts state <state.yaml>'
+  '       node check-docs.ts state <state.yaml>\n' +
+  '       node check-docs.ts residue <ファイル|ディレクトリ...>'
 
-const MODES = ['spec', 'plan', 'design', 'trace', 'ledger', 'map', 'state']
+const MODES = ['spec', 'plan', 'design', 'trace', 'ledger', 'map', 'state', 'residue']
 if (!MODES.includes(mode)) {
   console.error(USAGE)
   process.exit(2)
@@ -856,8 +865,8 @@ if (mode === 'state') {
     }
   })
 
-  const FULL_ORDER = ['spec', 'sketch', 'ground', 'review', 'spike', 'plan', 'impl', 'codereview', 'refine', 'gate']
-  const SHORT_PHASES = new Set(['spec', 'sketch', 'impl', 'codereview', 'refine', 'gate']) // sketch/codereview/refine は短縮でも任意実施可
+  const FULL_ORDER = ['spec', 'sketch', 'ground', 'review', 'spike', 'plan', 'impl', 'codereview', 'refine', 'gate', 'cleanup']
+  const SHORT_PHASES = new Set(['spec', 'sketch', 'impl', 'codereview', 'refine', 'gate', 'cleanup']) // sketch/codereview/refine は短縮でも任意実施可
   const PHASE_VOCAB = new Set([...FULL_ORDER, 'done'])
 
   const str = (v: unknown): string | null => typeof v === 'string' ? v : null
@@ -865,7 +874,7 @@ if (mode === 'state') {
     typeof top[k] === 'object' ? top[k] as Record<string, string> : {}
 
   // Y1: 語彙・形式
-  const KNOWN_TOP = new Set(['feature', 'course', 'phase', 'phases_done', 'sketch', 'review', 'spike', 'impl', 'codereview', 'refine', 'progress', 'updated'])
+  const KNOWN_TOP = new Set(['feature', 'course', 'phase', 'phases_done', 'sketch', 'review', 'spike', 'impl', 'codereview', 'refine', 'cleanup', 'progress', 'updated'])
   for (const k of Object.keys(top)) {
     if (!KNOWN_TOP.has(k)) findings.push({ check: 'Y1:語彙・形式', detail: `未知のトップレベルキー: ${k}（正準定義は dandori ルーターの SKILL.md）` })
   }
@@ -887,6 +896,7 @@ if (mode === 'state') {
     spike: new Set(['pending', 'done', 'skipped']),
     codereview: new Set(['in_progress', 'passed', 'escalated', 'skipped']),
     refine: new Set(['pending', 'done', 'skipped']),
+    cleanup: new Set(['pending', 'done', 'skipped']),
   }
   for (const [sec, vocab] of Object.entries(STATUS_VOCAB)) {
     const s = section(sec).status
@@ -964,6 +974,7 @@ if (mode === 'state') {
     ['spike', ['done', 'skipped']],
     ['codereview', ['passed', 'escalated', 'skipped']],
     ['refine', ['done', 'skipped']],
+    ['cleanup', ['done', 'skipped']],
   ]
   for (const [sec, ok] of doneNeedsStatus) {
     const s = section(sec).status
@@ -996,6 +1007,10 @@ if (mode === 'state') {
     // sketch は skipped でも phases_done に入りうるので、status が skipped でない場合のみ成果物を要求する
     if (phasesDone.includes('sketch') && section('sketch').status !== 'skipped' && !exists('sketch.md')) {
       findings.push({ check: 'Y4:成果物整合', detail: 'phases_done に sketch があるのに sketch.md がない（sketch 完了の成果物 — skipped なら sketch.status に記録する）' })
+    }
+    // cleanup は trace.md を B 行↔テスト対応の作業リストとして使う（処分は cleanup の最後）
+    if (phase === 'cleanup' && !exists('trace.md')) {
+      findings.push({ check: 'Y4:成果物整合', detail: 'phase: cleanup なのに trace.md がない — cleanup の作業リスト（gate はクローズで trace.md を処分しない）' })
     }
   } else {
     if (!exists('spec.md')) {
@@ -1166,6 +1181,41 @@ if (mode === 'map') {
   finishReport()
 }
 
+// ---- テストコード走査の共通部品（trace / residue）----------------------------------
+
+const SCAN_SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', 'vendor', 'target', '.dandori'])
+const SCAN_MAX_FILE_SIZE = 1024 * 1024
+
+/** grep トークンを B-ID に正規化する。B-ID 候補でないもの（B-ORDER 等）は null */
+function normalizeBIdToken(raw: string): string | null {
+  let id = raw.replace(/\.+$/, '') // 文末ピリオド由来のゴミを除去
+  // 閉じ括弧は開き括弧と釣り合わない分だけ末尾から剥がす（B-15(b) は保持、B-15) は B-15 に）
+  while (id.endsWith(')') && (id.match(/\(/g) ?? []).length < (id.match(/\)/g) ?? []).length) {
+    id = id.slice(0, -1)
+  }
+  while (id.endsWith('(')) id = id.slice(0, -1) // ID は開き括弧で終わらない
+  id = id.replace(/\.+$/, '')
+  // B-ID は数値開始が正準 — フィクスチャ文字列（B-ORDER 等）を候補にしない
+  if (!/^B-\d/.test(id)) return null
+  return id
+}
+
+function walkFiles(path: string, onFile: (path: string) => void): void {
+  let st: { isDirectory(): boolean; size: number }
+  try { st = statSync(path) } catch {
+    console.error(`走査対象を読めない: ${path}`)
+    process.exit(2)
+  }
+  if (st.isDirectory()) {
+    for (const name of readdirSync(path)) {
+      if (SCAN_SKIP_DIRS.has(name)) continue
+      walkFiles(join(path, name), onFile)
+    }
+  } else if (st.size <= SCAN_MAX_FILE_SIZE) {
+    onFile(path)
+  }
+}
+
 // ---- trace モード -----------------------------------------------------------------
 
 if (mode === 'trace') {
@@ -1178,28 +1228,12 @@ if (mode === 'trace') {
   const struckIds = new Set(spec.bs.filter(b => b.struck).flatMap(b => expandRange(b.id)))
 
   // テストファイル走査。B-ID はトークン単位で完全一致（B-1 が B-12 に誤マッチしない）
-  const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', 'vendor', 'target', '.dandori'])
-  const MAX_FILE_SIZE = 1024 * 1024
   const hits = new Map<string, string[]>() // B-ID → "file:line" の一覧
   const skipHits = new Map<string, string[]>() // B-ID → skip/todo 指定されたテスト行の "file:line"
   // 同一行の skip 検出（.skip( / .todo( / xit( / xdescribe( / xtest(）— 外側ブロックの
   // describe.skip は行 grep では見えない（gate のランナーサマリ skipped=0 確認が正）
   const SKIP_TEST = /\.(skip|todo)\s*\(|\b(xit|xdescribe|xtest)\s*\(/
   let scannedFiles = 0
-
-  /** grep トークンを B-ID に正規化する。B-ID 候補でないもの（B-ORDER 等）は null */
-  function normalizeToken(raw: string): string | null {
-    let id = raw.replace(/\.+$/, '') // 文末ピリオド由来のゴミを除去
-    // 閉じ括弧は開き括弧と釣り合わない分だけ末尾から剥がす（B-15(b) は保持、B-15) は B-15 に）
-    while (id.endsWith(')') && (id.match(/\(/g) ?? []).length < (id.match(/\)/g) ?? []).length) {
-      id = id.slice(0, -1)
-    }
-    while (id.endsWith('(')) id = id.slice(0, -1) // ID は開き括弧で終わらない
-    id = id.replace(/\.+$/, '')
-    // B-ID は数値開始が正準 — フィクスチャ文字列（B-ORDER 等）を幽霊候補にしない
-    if (!/^B-\d/.test(id)) return null
-    return id
-  }
 
   function scanFile(path: string): void {
     let text: string
@@ -1209,7 +1243,7 @@ if (mode === 'trace') {
     text.split('\n').forEach((line, idx) => {
       const skipped = SKIP_TEST.test(line)
       for (const raw of line.match(/B-[\w.()]+/g) ?? []) {
-        let id = normalizeToken(raw)
+        let id = normalizeBIdToken(raw)
         if (id === null) continue
         if (!specIds.has(id)) {
           // spec にない括弧サフィックス付き ID（B-15(b) 等のパラメタライズ表記）は基底 B-ID に帰属
@@ -1226,22 +1260,7 @@ if (mode === 'trace') {
       }
     })
   }
-  function walk(path: string): void {
-    let st: { isDirectory(): boolean; size: number }
-    try { st = statSync(path) } catch {
-      console.error(`走査対象を読めない: ${path}`)
-      process.exit(2)
-    }
-    if (st.isDirectory()) {
-      for (const name of readdirSync(path)) {
-        if (SKIP_DIRS.has(name)) continue
-        walk(join(path, name))
-      }
-    } else if (st.size <= MAX_FILE_SIZE) {
-      scanFile(path)
-    }
-  }
-  for (const root of scanRoots) walk(root)
+  for (const root of scanRoots) walkFiles(root, scanFile)
 
   // トレース表の叩き台（unit/e2e/formal はテスト対応が必要。visual/manual は最終ゲートで確認）
   const NEEDS_TEST = new Set(['unit', 'e2e', 'formal'])
@@ -1298,6 +1317,48 @@ if (mode === 'trace') {
     })
   }
 
+  finishReport()
+}
+
+// ---- residue モード ---------------------------------------------------------------
+
+if (mode === 'residue') {
+  const roots = argvRest.slice(1)
+  if (roots.length === 0 || roots.some(p => p.startsWith('--'))) { console.error(USAGE); process.exit(2) }
+
+  let scannedFiles = 0
+  let exemptLines = 0
+  for (const root of roots) {
+    walkFiles(root, (path) => {
+      let text: string
+      try { text = readFileSync(path, 'utf-8') } catch { return }
+      if (text.includes('\u0000')) return // バイナリ
+      scannedFiles++
+      text.split('\n').forEach((line, idx) => {
+        // dandori-ok: <理由> の行は裁定済みの機能的依存 — 除外（マーカー自身も dandori を含む）
+        if (line.includes('dandori-ok:')) { exemptLines++; return }
+        const loc = `${path}:${idx + 1}`
+        for (const raw of line.match(/B-[\w.()]+/g) ?? []) {
+          const id = normalizeBIdToken(raw)
+          if (id === null) continue
+          findings.push({
+            check: 'RS1:B-IDトークン残存',
+            detail: `${id} が残っている: ${loc} — テスト名・コメントから剥がすか、機能的依存なら dandori-ok: で裁定を記録する`,
+          })
+        }
+        if (/dandori/i.test(line)) {
+          findings.push({
+            check: 'RS2:dandori言及残存',
+            detail: `${loc}: ${line.trim().slice(0, 80)}`,
+          })
+        }
+      })
+    })
+  }
+
+  console.log(`# プロセス言及残存検査 — ${roots.join(', ')}`)
+  console.log(`走査 ${scannedFiles} ファイル / dandori-ok 除外 ${exemptLines} 行`)
+  console.log('')
   finishReport()
 }
 

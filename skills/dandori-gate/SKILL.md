@@ -89,22 +89,15 @@ spec.md の全 B 行について、以下の表を **`.dandori/specs/<feature>/t
 - **検証手段の不在**（⚠️ 未検証） → テストを追加するか、ユーザー承認の上で
   ゲートタグを manual に降格するか。**黙認は不可**
 
-### 4. クローズ
+### 4. cleanup への遷移
 
-コミット完了後、**この順序で**行う（昇格元の処分が先行すると知見が失われる）:
-
-1. `.dandori/map/` が存在すれば、dandori-survey の **update + promote** の実行を
-   提案する — update は今回のコード変更の map への反映、promote は design.md /
-   trace.md に蓄積されたフロー知見（実行検証済の既存コード挙動、不変条件、
-   既存理解の訂正）の map への昇格。昇格元は次のステップで処分されるため、
-   **必ず処分より前に**実行する。状態マップがあれば、design.md の「共有状態への影響」で
-   宣言した writers/readers の増減を states.md に反映するのも update の一部
-2. sketch.md・plan.md・trace.md・review-ledger.md は役目を終える（削除 or アーカイブ。リポジトリ方針に従う）
-3. design.md は発見ログの spec 還流（§3）を済ませた上で同様に処分してよい
-4. spec.md は長寿命ドキュメントとして残す
-5. state.yaml: `phase: done`
+コミット完了後、state.yaml を `phase: cleanup` にして **dandori-cleanup へ遷移する**。
+プロセス由来の言及（テスト名の B-ID、dandori 参照コメント）の除去と、クローズ手順
+（map への昇格提案・使い捨てドキュメントの処分・spec 残置・`phase: done`）は
+dandori-cleanup が担う。**trace.md はこの工程では処分しない** — cleanup が
+B 行↔テスト対応の作業リストとして使う。
 
 ## 完了条件
 
 - トレース表の全行が ✅（またはユーザー裁定による明示的な受容）
-- コミット済み、state.yaml が `done`
+- コミット済み、state.yaml が `phase: cleanup`（クローズは dandori-cleanup が担う）
