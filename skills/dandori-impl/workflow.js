@@ -1,3 +1,5 @@
+// @ts-nocheck — Workflow スクリプトはトップレベル return を持つ実行フォーマットで、tsc の
+// モジュール検査対象外（TS1108 で後続のフロー解析が壊れ、偽の未使用変数警告が出る）
 export const meta = {
   name: 'dandori-impl',
   description: 'dandori impl 工程の決定的ループ — マイルストーンごとに ブリーフ組み立て → 実装ディスパッチ → 独立ゲート検証 → 発見の還流 を逐次で回す',
@@ -25,16 +27,19 @@ export const meta = {
 //   blocked            — plan.md / state.yaml が見つからない・整合しない
 // ============================================================================
 
-if (!args || !args.specDir) {
+// Claude Code の Workflow ツールは環境によって args を JSON 文字列で渡す — オブジェクトに正規化する
+const A = typeof args === 'string' ? JSON.parse(args) : args
+
+if (!A || !A.specDir) {
   throw new Error('args に specDir が必要。任意: maxFixRounds')
 }
 
-const SPEC_DIR = args.specDir.replace(/\/+$/, '')
+const SPEC_DIR = A.specDir.replace(/\/+$/, '')
 const SPEC = `${SPEC_DIR}/spec.md`
 const DESIGN = `${SPEC_DIR}/design.md`
 const PLAN = `${SPEC_DIR}/plan.md`
 const STATE = `${SPEC_DIR}/state.yaml`
-const MAX_FIX_ROUNDS = args.maxFixRounds || 2
+const MAX_FIX_ROUNDS = A.maxFixRounds || 2
 
 // ---- schemas ---------------------------------------------------------------
 

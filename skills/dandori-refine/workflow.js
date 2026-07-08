@@ -1,3 +1,5 @@
+// @ts-nocheck — Workflow スクリプトはトップレベル return を持つ実行フォーマットで、tsc の
+// モジュール検査対象外（TS1108 で後続のフロー解析が壊れ、偽の未使用変数警告が出る）
 export const meta = {
   name: 'dandori-refine',
   description: 'dandori refine 工程の決定的フロー — 機械検査先行 → 3レーン軽量レビュー → 採否フィルタ → 適用 + ゲート再実行。1ラウンド固定、ループなし',
@@ -26,15 +28,18 @@ export const meta = {
 //   blocked  — 入口ゲートが赤（codereview 通過後の手動編集等） — 適用前に検出して中断
 // ============================================================================
 
-if (!args || !args.diffCommand || !Array.isArray(args.gates) || args.gates.length === 0) {
+// Claude Code の Workflow ツールは環境によって args を JSON 文字列で渡す — オブジェクトに正規化する
+const A = typeof args === 'string' ? JSON.parse(args) : args
+
+if (!A || !A.diffCommand || !Array.isArray(A.gates) || A.gates.length === 0) {
   throw new Error('args に diffCommand / gates（配列）が必要。任意: mechCommands / resources / mapDir')
 }
 
-const DIFF_CMD = args.diffCommand
-const GATES = args.gates
-const MECH = Array.isArray(args.mechCommands) ? args.mechCommands : []
-const RESOURCES = args.resources || null
-const MAP_DIR = args.mapDir || null
+const DIFF_CMD = A.diffCommand
+const GATES = A.gates
+const MECH = Array.isArray(A.mechCommands) ? A.mechCommands : []
+const RESOURCES = A.resources || null
+const MAP_DIR = A.mapDir || null
 
 // ---- schemas ---------------------------------------------------------------
 

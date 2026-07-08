@@ -82,7 +82,8 @@ spec.md / design.md は**どのレーンにも渡さない** — この工程の
 （適用者が自分の仕事量を減らす方向にフィルタを甘くする利益相反を避ける）。
 
 - args: `diffCommand` / `gates`（正準コマンド配列）、任意で `mechCommands`（formatter/linter）/
-  `resources` / `mapDir`
+  `resources` / `mapDir`。JSON オブジェクトで渡す（文字列で届く環境でもスクリプト側で
+  JSON.parse に正規化される）
 - 戻り値は `done`（適用・棄却一覧つき）/ `gate_red` / `blocked`（入口ゲート赤）。振る舞い変更として棄却された提案は
   `behaviorChanges` で返る — design.md の発見ログへの記録と、採否一覧のユーザー提示、
   state.yaml の更新はメインエージェントが行う

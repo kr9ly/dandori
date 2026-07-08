@@ -76,7 +76,8 @@ plan.md のマニフェストに従い、実装エージェントに渡す情報
 利益は希釈防止の構造的な強制 — ブリーフ組み立て係（マニフェスト記載セクションだけを抽出）と
 実装エージェントを分離し、実装エージェントのプロンプトに spec/design のパスを存在させない。
 
-- args: `specDir`（specs/<feature> — plan.md / state.yaml もこの直下）、任意で `maxFixRounds`
+- args: `specDir`（specs/<feature> — plan.md / state.yaml もこの直下）、任意で `maxFixRounds`。
+  JSON オブジェクトで渡す（文字列で届く環境でもスクリプト側で JSON.parse に正規化される）
 - 逐次実行のみ。§並列化の判断（依存なし・ファイル非重複）はメインの領分なので
   スクリプトには持ち込まない — 並列にしたい場合は本文の手順で
 - 戻り値は `done` / `needs_adjudication`（spec 波及の [発見]）/ `halted`（不変条件抵触）/

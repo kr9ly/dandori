@@ -1,3 +1,5 @@
+// @ts-nocheck — Workflow スクリプトはトップレベル return を持つ実行フォーマットで、tsc の
+// モジュール検査対象外（TS1108 で後続のフロー解析が壊れ、偽の未使用変数警告が出る）
 export const meta = {
   name: 'dandori-review',
   description: 'dandori review 工程の決定的ループ — 独立レビュー → 台帳追記 → 反映 → check-docs ledger 収束判定。レビューアには spec/design のパスだけを渡す',
@@ -19,6 +21,11 @@ export const meta = {
 //               （例: "node <dandori-repo>/skills/dandori/scripts/check-docs.ts"）
 //   reviewDocs  (任意) レビュー観点に加える参照ドキュメントのパス配列
 //               （resources.md 記載の規約・設計ドキュメント・バグパターン集。パスのみ）
+//   checkStateModel (任意) check-state-model.ts の実行プレフィックス
+//               （例: "node <dandori-repo>/skills/dandori-spec/scripts/check-state-model.ts"）。
+//               spec に dandori-state-model ブロックがある場合、反映エージェントに
+//               「反映後にチェッカーを exit 0 まで回す」を強制する — 反映が軸値未定義・
+//               Covers 未知値・単軸 dependent 等の形式エラーを持ち込むのを工程内で検出する
 //   maxRounds   (任意) ラウンド数の暴走バックストップ（既定 8 — 通常は再燃 / 停滞の
 //               escalate が先に効く。件数による打ち切りはしない設計のため大きめ）
 //
@@ -29,17 +36,21 @@ export const meta = {
 //   blocked            — spec.md / design.md が見つからない
 // ============================================================================
 
-if (!args || !args.specDir || !args.checkDocs) {
+// Claude Code の Workflow ツールは環境によって args を JSON 文字列で渡す — オブジェクトに正規化する
+const A = typeof args === 'string' ? JSON.parse(args) : args
+
+if (!A || !A.specDir || !A.checkDocs) {
   throw new Error('args に specDir / checkDocs が必要。任意: reviewDocs（パス配列） / maxRounds')
 }
 
-const SPEC_DIR = args.specDir.replace(/\/+$/, '')
+const SPEC_DIR = A.specDir.replace(/\/+$/, '')
 const SPEC = `${SPEC_DIR}/spec.md`
 const DESIGN = `${SPEC_DIR}/design.md`
 const LEDGER = `${SPEC_DIR}/review-ledger.md`
-const REVIEW_DOCS = Array.isArray(args.reviewDocs) ? args.reviewDocs : []
-const CHECK = args.checkDocs
-const MAX_ROUNDS = args.maxRounds || 8
+const REVIEW_DOCS = Array.isArray(A.reviewDocs) ? A.reviewDocs : []
+const CHECK = A.checkDocs
+const SM_CHECK = A.checkStateModel || null
+const MAX_ROUNDS = A.maxRounds || 8
 
 // ---- schemas ---------------------------------------------------------------
 
@@ -186,7 +197,7 @@ ${JSON.stringify(findings.map((f, index) => ({ index, severity: f.severity, titl
 
 台帳は追記のみ。既存行の書き換え・削除は禁止。`
 
-const reflectPrompt = (items) => `あなたは dandori-review の反映エージェントです。独立レビューの以下の指摘（blocker / major）を
+const reflectPrompt = (items, smCheck) => `あなたは dandori-review の反映エージェントです。独立レビューの以下の指摘（blocker / major）を
 spec.md / design.md に反映してください。
 
 指摘（JSON）:
@@ -204,7 +215,13 @@ ${JSON.stringify(items.map(f => ({ id: f.id, severity: f.severity, title: f.titl
   （却下はユーザー裁定を要する処置）
 - 反映した指摘は台帳の該当行（ID で特定）の処置セルを「反映済」にし、
   根拠・理由セルにどのドキュメントをどう直したか一行で記録すること
-- needs_adjudication に回した指摘の台帳行は触らない（処置はユーザー裁定後に記録される）`
+- needs_adjudication に回した指摘の台帳行は触らない（処置はユーザー裁定後に記録される）${smCheck ? `
+- spec.md への反映後、次のコマンドを実行し **exit 0 になるまで形式を修正すること**:
+  \`${smCheck} ${SPEC}\`
+  直してよいのは自分の反映が持ち込んだ形式エラーのみ（軸に値を追加し忘れた Covers の未知値、
+  2 軸未満の dependent エントリ、only で表現すべき単軸制約など）。チェッカーを黙らせるために
+  反映内容のセマンティクスを削る・弱めることはしないこと。exit 0 にできない場合はその旨を
+  notes に書いて返すこと` : ''}`
 
 const judgePrompt = `次のコマンドを実行し、出力とコマンドの exit code を報告してください:
 ${CHECK} ledger ${LEDGER}
@@ -319,7 +336,7 @@ while (true) {
     toReflect.push({ ...f, id: e.id || `R-?(${i})` })
   })
 
-  const reflect = await agent(reflectPrompt(toReflect), { label: `反映 Rd${round}`, phase: `Rd${round} 反映`, schema: REFLECT_SCHEMA })
+  const reflect = await agent(reflectPrompt(toReflect, setup.has_state_model ? SM_CHECK : null), { label: `反映 Rd${round}`, phase: `Rd${round} 反映`, schema: REFLECT_SCHEMA })
   if (!reflect) {
     return { status: 'escalated', reason: '反映エージェントが結果を返さなかった — ドキュメントの状態をメインで確認すること', minors, lastRound: round, ledger: LEDGER }
   }

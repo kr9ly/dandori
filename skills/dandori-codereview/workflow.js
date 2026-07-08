@@ -1,3 +1,5 @@
+// @ts-nocheck — Workflow スクリプトはトップレベル return を持つ実行フォーマットで、tsc の
+// モジュール検査対象外（TS1108 で後続のフロー解析が壊れ、偽の未使用変数警告が出る）
 export const meta = {
   name: 'dandori-codereview',
   description: 'dandori codereview 工程の決定的ループ — 入口検査 → 4レーン独立レビュー → 台帳追記 → 指摘ごと反証 → 修正 → check-docs ledger 収束判定',
@@ -29,20 +31,23 @@ export const meta = {
 //   blocked            — 入口条件（テスト緑 / ファイル存在）を満たさない
 // ============================================================================
 
-if (!args || !args.specDir || !args.diffCommand || !Array.isArray(args.gates) || args.gates.length === 0 || !args.checkDocs) {
+// Claude Code の Workflow ツールは環境によって args を JSON 文字列で渡す — オブジェクトに正規化する
+const A = typeof args === 'string' ? JSON.parse(args) : args
+
+if (!A || !A.specDir || !A.diffCommand || !Array.isArray(A.gates) || A.gates.length === 0 || !A.checkDocs) {
   throw new Error('args に specDir / diffCommand / gates（配列） / checkDocs が必要。任意: resources / mutationCommand / maxRounds')
 }
 
-const SPEC_DIR = args.specDir.replace(/\/+$/, '')
+const SPEC_DIR = A.specDir.replace(/\/+$/, '')
 const SPEC = `${SPEC_DIR}/spec.md`
 const DESIGN = `${SPEC_DIR}/design.md`
 const LEDGER = `${SPEC_DIR}/review-ledger.md`
-const RESOURCES = args.resources || null
-const DIFF_CMD = args.diffCommand
-const GATES = args.gates
-const CHECK = args.checkDocs
-const MUTATION = args.mutationCommand || null
-const MAX_ROUNDS = args.maxRounds || 6
+const RESOURCES = A.resources || null
+const DIFF_CMD = A.diffCommand
+const GATES = A.gates
+const CHECK = A.checkDocs
+const MUTATION = A.mutationCommand || null
+const MAX_ROUNDS = A.maxRounds || 6
 
 // ---- schemas ---------------------------------------------------------------
 
