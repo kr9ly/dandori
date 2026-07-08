@@ -763,15 +763,17 @@ if (mode === 'ledger') {
       const m = r.action.match(/^再燃→\s*(\S+)$/)
       return m !== null && rowById.get(m[1])?.action !== '反証破棄'
     })
-    // escalate 条件 2: 3 ラウンド以上連続で blocker+major が減っていない
-    let stalled = false
-    for (let i = 2; i < counts.length; i++) {
-      if (counts[i] >= counts[i - 1] && counts[i - 1] >= counts[i - 2] && counts[i] > 0) stalled = true
-    }
+    // escalate 条件 2: 直近 3 ラウンドで blocker+major が減っていない（履歴上の過去の停滞窓は
+    // 数えない — 一度停滞しても以降のラウンドで回復したなら現在の停滞ではない）
+    const n = counts.length
+    const stalled = n >= 3
+      && counts[n - 1] >= counts[n - 2] && counts[n - 2] >= counts[n - 3] && counts[n - 1] > 0
 
+    // 通過条件（blocker+major ゼロのラウンド）が最優先 — SKILL.md の正準。
+    // 停滞・再燃はゼロラウンドが出ていない場合の脱出弁
     const latest = counts[counts.length - 1]
-    const verdict = (rekindled.length > 0 || stalled) ? 'escalated'
-      : latest === 0 ? 'passed'
+    const verdict = latest === 0 ? 'passed'
+      : (rekindled.length > 0 || stalled) ? 'escalated'
       : '継続'
 
     console.log(`## ${prefix}（${label}）`)
