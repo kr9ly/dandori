@@ -120,7 +120,7 @@ spike:
   status: skipped                 # pending | done | skipped
   reason: 全前提が実行検証済み
 impl:
-  milestones_done: 2
+  milestones_done: 2              # 整数カウンタ（逐次実装）または完了 ID リスト [M1, M2]（並列実装 — workflow.js はこちらで記録）
   milestones_total: 5
 codereview:
   rounds: 1                       # 実施済みコードレビューラウンド数

@@ -870,7 +870,24 @@ if (mode === 'state') {
   }
   const rounds = numeric('review', 'rounds')
   numeric('codereview', 'rounds')
-  const mDone = numeric('impl', 'milestones_done')
+  // milestones_done は整数カウンタ（逐次実装）と ID リスト（並列実装 — 完了順が
+  // マイルストーン番号順と一致しない場合に必要。dandori-impl workflow.js はこちらで記録）の両形式を受理する
+  const milestonesDone = (): number | null => {
+    const v = section('impl')['milestones_done']
+    if (v === undefined) return null
+    if (/^\d+$/.test(v)) return Number(v)
+    if (/^\[.*\]$/.test(v)) {
+      const ids = v.replace(/^\[|\]$/g, '').split(',').map(s => s.trim()).filter(s => s !== '')
+      const dup = ids.filter((id, i) => ids.indexOf(id) !== i)
+      if (dup.length > 0) {
+        findings.push({ check: 'Y1:語彙・形式', detail: `impl.milestones_done に重複 ID（${[...new Set(dup)].join(', ')}）` })
+      }
+      return new Set(ids).size
+    }
+    findings.push({ check: 'Y1:語彙・形式', detail: `impl.milestones_done「${v}」が非負整数でも ID リスト（[M1, M2] 形式）でもない` })
+    return null
+  }
+  const mDone = milestonesDone()
   const mTotal = numeric('impl', 'milestones_total')
   numeric('refine', 'applied')
   numeric('refine', 'rejected')

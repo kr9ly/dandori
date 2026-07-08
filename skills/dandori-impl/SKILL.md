@@ -55,7 +55,9 @@ plan.md のマニフェストに従い、実装エージェントに渡す情報
   - design.md の記述修正で済む → 修正して続行
   - spec.md の振る舞いに波及する → 一時停止してユーザーに裁定を仰ぐ
     （軽微なら B 行を修正して続行、重大なら plan からやり直し）
-- state.yaml の `impl.milestones_done` をインクリメント
+- state.yaml の `impl.milestones_done` を記録する — 整数カウンタのインクリメント（逐次）または
+  完了マイルストーン ID の追記（`[M1, M2]` 形式 — 並列実装で完了順が M 番号順と一致しないときはこちら。
+  workflow.js はこの形式で記録する）。check-docs.ts state は両形式を受理する
 
 ### 4. 進捗報告
 
