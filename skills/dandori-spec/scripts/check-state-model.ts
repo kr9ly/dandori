@@ -590,7 +590,7 @@ function parseCellSpec(v: unknown, ctx: string): CellSpec {
 
 function buildModel(raw: unknown): Model {
   const r = asRecord(raw)
-  const known = new Set(['axes', 'observations', 'modifiers', 'orthogonal', 'orthogonal_groups', 'dependent', 'only', 'chains', 'ground'])
+  const known = new Set(['axes', 'observations', 'modifiers', 'orthogonal', 'orthogonal_groups', 'dependent', 'only', 'chains', 'ground', 'flow'])
   for (const key of Object.keys(r)) {
     if (!known.has(key)) fail(`未知のトップレベルキー: ${key}（語彙は固定 — appendix-state-model.md 参照）`)
   }
@@ -662,6 +662,21 @@ function buildModel(raw: unknown): Model {
     if (pair.length !== 2) fail(`ground[${i}]: axes は 2 要素（自己ペア = per-item 混在の裁定送り）`)
     return { axes: [pair[0] ?? '', pair[1] ?? ''], note: asString(d.note, `ground[${i}].note`) }
   })
+
+  // flow（任意 — spec ツリーレンダラーの背骨。カバレッジ検査には関与しない）の参照検証
+  {
+    const axisIds = new Set(axes.map(a => a.id))
+    const anchored = new Set<string>()
+    asArray(r.flow).forEach((o, i) => {
+      const d = asRecord(o)
+      asString(d.step, `flow[${i}].step`)
+      for (const ax of asStringArray(d.axes, `flow[${i}].axes`)) {
+        if (!axisIds.has(ax)) fail(`flow[${i}]: 未知の軸 ${ax}`)
+        if (anchored.has(ax)) fail(`flow[${i}]: 軸 ${ax} が複数のステップに錨付けされている`)
+        anchored.add(ax)
+      }
+    })
+  }
 
   return { axes, observations, modifiers, orthogonal, orthogonalGroups, dependent, only, chains, ground }
 }
