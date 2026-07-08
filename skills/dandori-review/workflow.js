@@ -133,6 +133,15 @@ const JUDGE_SCHEMA = {
   },
 }
 
+const ACK_SCHEMA = {
+  type: 'object',
+  required: ['done'],
+  properties: {
+    done: { type: 'boolean' },
+    note: { type: 'string', description: '追記できなかった場合はその内容' },
+  },
+}
+
 const SETUP_SCHEMA = {
   type: 'object',
   required: ['files_ok', 'max_r_round', 'has_state_model'],
@@ -229,6 +238,10 @@ ${JSON.stringify(items.map(f => ({ id: f.id, severity: f.severity, title: f.titl
   反映内容のセマンティクスを削る・弱めることはしないこと。exit 0 にできない場合はその旨を
   notes に書いて返すこと` : ''}`
 
+const zeroRoundPrompt = (round) => `指摘台帳 ${LEDGER} の末尾に次の 1 行をそのまま追記してください。他の行は変更しないこと:
+
+<!-- round: R Rd=${round} 指摘なし -->`
+
 const judgePrompt = `次のコマンドを実行し、出力とコマンドの exit code を報告してください:
 ${CHECK} ledger ${LEDGER}
 
@@ -287,6 +300,12 @@ while (true) {
     }
     let judge = null
     if (rRowsExist) {
+      if (findings.length === 0) {
+        // このラウンドは行を追記していない — マーカーがないと check-docs は最後の行がある
+        // ラウンドまでしか観測できず、過去の停滞パターンから escalated を返し続ける。
+        // 「指摘なし」マーカーで今ラウンドを可視化する
+        await agent(zeroRoundPrompt(round), { label: '台帳:ラウンド記録', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA })
+      }
       judge = await agent(judgePrompt, { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
     }
     // 完了条件は check-docs の exit 0（形式不備なし）まで含む — 未処置行や欠番を残して

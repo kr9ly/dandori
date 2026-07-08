@@ -43,8 +43,13 @@
  *       blocker・major への保留（保留は minor のみ）/ 反証破棄の R-n 行（codereview 専用語彙）
  *   L3. 再燃参照 — 再燃→<ID> の参照先が台帳にない
  *   L4. ID 重複・欠番（台帳は追記のみ — 欠番は行の削除の疑い）
+ *   L5. ラウンド記録矛盾 — 「指摘なし」マーカーのラウンドに blocker/major の生存行がある
+ *   指摘ゼロのラウンドは台帳に行が残らず観測できない（過去の停滞パターンから escalated を
+ *   返し続ける）ため、`<!-- round: C Rd=7 指摘なし -->` 形式のマーカー行で記録する
+ *   （blocker/major の行を追記したラウンドでは不要）。
  *   収束判定（指摘とは別枠 — exit code に影響しない）:
- *     passed = 最新ラウンドの blocker+major がゼロ（C-n は反証破棄を生存数から除外）
+ *     passed = 最新ラウンド（マーカーのみのラウンド含む）の blocker+major がゼロ
+ *              （C-n は反証破棄を生存数から除外）
  *     escalated = 再燃→ がある（参照先が反証破棄の行は除く — 反証済みの再生産）、
  *                 または 3 ラウンド以上連続で blocker+major 件数が減っていない
  *     継続 = どちらでもない
@@ -79,6 +84,12 @@
  *   T1. 対応テストなし — unit / e2e / formal の B 行に B-ID の grep ヒットがない（⚠️ 候補）
  *   T2. 幽霊 B-ID — テストコード中の B-ID が spec に存在しない
  *   T3. 削除済み参照 — 削除済み B 行の B-ID を参照するテスト
+ *   T4. skip されたテスト — B-ID を含むテスト行が .skip / .todo / xit 等で無効化されている
+ *       （緑のスイートでも実行されない偽 ✅。同一行の検出のみ — 外側の describe.skip は
+ *       行 grep では見えないため、gate のランナーサマリ skipped=0 確認が正）
+ *   grep 候補は B-数字 開始のトークンに限定する（フィクスチャ文字列の B-ORDER 等を
+ *   幽霊と誤検出しない）。括弧はバランスを保って正規化し（B-15(b) を壊さない）、
+ *   spec にない括弧サフィックス付き ID はパラメタライズ表記として基底 B-ID に帰属させる
  *
  * 実行:
  *   node check-docs.ts spec <spec.md>
@@ -655,10 +666,19 @@ if (mode === 'ledger') {
     line: number
   }
   const rows: LedgerRow[] = []
+  // 「指摘なし」ラウンドのマーカー（<!-- round: C Rd=7 指摘なし -->）— 行が残らない
+  // ラウンドを収束判定に見せるための記録
+  const zeroRounds = new Map<string, Set<number>>()
   let inFence = false
   lines.forEach((line, idx) => {
     if (/^```/.test(line.trim())) { inFence = !inFence; return }
     if (inFence) return
+    const zm = line.match(/<!--\s*round:\s*([RC])\s+Rd=(\d+)\s+指摘なし\s*-->/)
+    if (zm) {
+      if (!zeroRounds.has(zm[1])) zeroRounds.set(zm[1], new Set())
+      zeroRounds.get(zm[1])!.add(Number(zm[2]))
+      return
+    }
     const m = line.trim().match(/^\|(.+)\|$/)
     if (!m) return
     const cells = m[1].split('|').map(c => c.trim())
@@ -684,7 +704,7 @@ if (mode === 'ledger') {
     })
   })
   if (inFence) fail(`${ledgerPath}: fenced block が閉じていない`)
-  if (rows.length === 0) {
+  if (rows.length === 0 && zeroRounds.size === 0) {
     console.error(`${ledgerPath}: 台帳の行を抽出できない — 正準形式（| ID | Rd | 深刻度 | 論点 | 処置 | 根拠・理由 |）か確認`)
     process.exit(2)
   }
@@ -745,18 +765,33 @@ if (mode === 'ledger') {
 
   // 収束判定（接頭辞ごと — R と C はラウンド系列が別）
   console.log(`# 台帳収束判定 — ${ledgerPath}`)
-  console.log(`行 ${rows.length}（R: ${rows.filter(r => r.prefix === 'R').length} / C: ${rows.filter(r => r.prefix === 'C').length}）`)
+  const zrTotal = [...zeroRounds.values()].reduce((n, s) => n + s.size, 0)
+  console.log(`行 ${rows.length}（R: ${rows.filter(r => r.prefix === 'R').length} / C: ${rows.filter(r => r.prefix === 'C').length}）` +
+    (zrTotal > 0 ? ` / 指摘なしマーカー ${zrTotal}` : ''))
   console.log('')
   for (const [prefix, label] of [['R', 'dandori-review'], ['C', 'dandori-codereview']] as const) {
     const prows = rows.filter(r => r.prefix === prefix)
-    if (prows.length === 0) continue
+    const zr = zeroRounds.get(prefix) ?? new Set<number>()
+    if (prows.length === 0 && zr.size === 0) continue
 
     // 生存数 = blocker/major のうち処置で無効化されていないもの。
     // C-n は反証破棄（誤検出と確定）を除外する。再燃行は生存として数える
     const survives = (r: LedgerRow): boolean =>
       (r.severity === 'blocker' || r.severity === 'major') && !(prefix === 'C' && r.action === '反証破棄')
-    const rounds = [...new Set(prows.map(r => r.rd))].sort((a, b) => a - b)
+    // 「指摘なし」マーカーのラウンドも系列に含める（行がなければ生存数 0 として観測される）
+    const rounds = [...new Set([...prows.map(r => r.rd), ...zr])].sort((a, b) => a - b)
     const counts = rounds.map(rd => prows.filter(r => r.rd === rd && survives(r)).length)
+
+    // L5: マーカーと生存行の矛盾（マーカーは「このラウンドは blocker/major ゼロ」の主張）
+    for (const rd of [...zr].sort((a, b) => a - b)) {
+      const alive = prows.filter(r => r.rd === rd && survives(r))
+      if (alive.length > 0) {
+        findings.push({
+          check: 'L5:ラウンド記録矛盾',
+          detail: `${prefix} Rd${rd} に「指摘なし」マーカーがあるが blocker/major の生存行がある（${alive.map(r => r.id).join(', ')}）`,
+        })
+      }
+    }
 
     // escalate 条件 1: 再燃（参照先が反証破棄なら「反証済みの再生産」— 対象外）
     const rekindled = prows.filter(r => {
@@ -1146,7 +1181,25 @@ if (mode === 'trace') {
   const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', 'vendor', 'target', '.dandori'])
   const MAX_FILE_SIZE = 1024 * 1024
   const hits = new Map<string, string[]>() // B-ID → "file:line" の一覧
+  const skipHits = new Map<string, string[]>() // B-ID → skip/todo 指定されたテスト行の "file:line"
+  // 同一行の skip 検出（.skip( / .todo( / xit( / xdescribe( / xtest(）— 外側ブロックの
+  // describe.skip は行 grep では見えない（gate のランナーサマリ skipped=0 確認が正）
+  const SKIP_TEST = /\.(skip|todo)\s*\(|\b(xit|xdescribe|xtest)\s*\(/
   let scannedFiles = 0
+
+  /** grep トークンを B-ID に正規化する。B-ID 候補でないもの（B-ORDER 等）は null */
+  function normalizeToken(raw: string): string | null {
+    let id = raw.replace(/\.+$/, '') // 文末ピリオド由来のゴミを除去
+    // 閉じ括弧は開き括弧と釣り合わない分だけ末尾から剥がす（B-15(b) は保持、B-15) は B-15 に）
+    while (id.endsWith(')') && (id.match(/\(/g) ?? []).length < (id.match(/\)/g) ?? []).length) {
+      id = id.slice(0, -1)
+    }
+    while (id.endsWith('(')) id = id.slice(0, -1) // ID は開き括弧で終わらない
+    id = id.replace(/\.+$/, '')
+    // B-ID は数値開始が正準 — フィクスチャ文字列（B-ORDER 等）を幽霊候補にしない
+    if (!/^B-\d/.test(id)) return null
+    return id
+  }
 
   function scanFile(path: string): void {
     let text: string
@@ -1154,11 +1207,22 @@ if (mode === 'trace') {
     if (text.includes('\u0000')) return // バイナリ
     scannedFiles++
     text.split('\n').forEach((line, idx) => {
+      const skipped = SKIP_TEST.test(line)
       for (const raw of line.match(/B-[\w.()]+/g) ?? []) {
-        const id = raw.replace(/[.)]+$/, '') // 文末の句読点由来のゴミを除去
+        let id = normalizeToken(raw)
+        if (id === null) continue
+        if (!specIds.has(id)) {
+          // spec にない括弧サフィックス付き ID（B-15(b) 等のパラメタライズ表記）は基底 B-ID に帰属
+          const base = id.match(/^(B-\d[\w.]*)\([\w.]*\)$/)
+          if (base && specIds.has(base[1])) id = base[1]
+        }
         if (!hits.has(id)) hits.set(id, [])
         const list = hits.get(id)!
         if (list.length < 5) list.push(`${path}:${idx + 1}`) // 根拠は 5 件で打ち切り
+        if (skipped) {
+          if (!skipHits.has(id)) skipHits.set(id, [])
+          skipHits.get(id)!.push(`${path}:${idx + 1}`)
+        }
       }
     })
   }
@@ -1223,6 +1287,15 @@ if (mode === 'trace') {
         detail: `テストコード中の ${id} が spec にない（typo か spec の陳腐化）: ${locs.join(', ')}`,
       })
     }
+  }
+
+  // T4: skip されたテスト（同一行検出のみ。緑のスイートに混ざっても実行されない = 偽 ✅ の温床）
+  for (const [id, locs] of [...skipHits.entries()].sort()) {
+    if (!specIds.has(id)) continue // 幽霊は T2 で報告済み
+    findings.push({
+      check: 'T4:skipされたテスト',
+      detail: `${id} のテストが skip / todo 指定されている — スイートが緑でも実行されていない: ${locs.join(', ')}`,
+    })
   }
 
   finishReport()

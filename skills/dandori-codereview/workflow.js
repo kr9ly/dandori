@@ -71,6 +71,7 @@ const FINDINGS_SCHEMA = {
           title: { type: 'string', description: '論点の一行要約（台帳の論点セルになる）' },
           detail: { type: 'string', description: '指摘の内容' },
           evidence: { type: 'string', description: '根拠（ファイル:行）' },
+          check: { type: 'string', description: '何を確認すれば白黒つくか（反証フェーズへのヒント。任意）' },
         },
       },
     },
@@ -165,13 +166,21 @@ const SETUP_SCHEMA = {
 
 // ---- プロンプトテンプレート（情報隔離はここで固定される）---------------------
 
-const COMMON_RULES = `ルール:
-- 机上の推測で指摘しない。必ず該当コードを読んで確認すること
-- 修正は行わない。指摘の列挙だけを返すこと
-- 各指摘に深刻度と根拠（ファイル:行）を付けること
+// レーンは発見係（finder）— 精度の担保は反証フェーズ（verifier）に全委譲する。
+// 精度をレーンに求めると自己検閲が起き、反証フェーズが飢える（2026-07-08 実測:
+// 4 レーンの生報告が計 blocker/major 1 件・反証破棄 0 のまま「毎ラウンド 1 件」の
+// プラトーが続いた）
+const COMMON_RULES = `ルール（あなたは発見係 — 指摘の白黒は後段の独立反証フェーズが付ける）:
+- 見落としは反証フェーズでは回復できないが、偽陽性は反証フェーズが破棄できる。
+  疑いは自己検閲せず列挙すること。「確信が持てないから黙る」は禁止
+- 照合対象をまず全数列挙し、1 件ずつ疑いを探すこと。目についた 1 件で走査を止めない
+- 各指摘に疑いの根拠（ファイル:行）と、可能なら「何を確認すれば白黒つくか」（check）を付けること
+- 深刻度は「指摘が真だった場合」の深刻度で付ける。確信度で下げない
   - blocker: 仕様を満たさない / データ破壊・欠損につながる
   - major: エッジケースの欠落、不変条件違反の可能性、隠れた波及
-  - minor: 改善提案・可読性`
+  - minor: 改善提案・可読性。minor だけは反証フェーズを通らずユーザーに直接届くため、
+    確信のあるもののみ報告すること
+- 修正は行わない。指摘の列挙だけを返すこと`
 
 const LANE_HEADER = `あなたは実装コードの独立レビューアです。コードベースへの読み取りアクセスがあります。
 レビュー対象の差分は次のコマンドで取得すること: ${DIFF_CMD}`
@@ -188,6 +197,7 @@ const LANES = {
 照合先: ${SPEC} を読むこと。
 問い: ${FIDELITY_QUESTION}
 「実装が spec を満たすか」自体は impl / gate の管轄なので対象外。
+走査対象の全数列挙: spec の全 B 行を列挙し、1 行ずつテストとの対応を疑うこと。
 
 ${COMMON_RULES}`,
   },
@@ -197,6 +207,7 @@ ${COMMON_RULES}`,
 
 照合先: ${DESIGN} を読むこと。
 問い: 不変条件それぞれについて、diff がそれを破る経路がないか呼び出し元まで遡って検証せよ。
+走査対象の全数列挙: design の不変条件を全数列挙し、1 件ずつ破れの疑いを探すこと。
 
 ${COMMON_RULES}`,
   },
@@ -207,6 +218,7 @@ ${COMMON_RULES}`,
     prompt: `${LANE_HEADER}
 
 問い: バグ・エッジケース欠落・並行性問題・リソースリークはないか。
+走査対象の全数列挙: diff の全ファイル・全 hunk を走査すること。
 
 ${COMMON_RULES}`,
   },
@@ -216,6 +228,7 @@ ${COMMON_RULES}`,
 
 照合先: ${DESIGN}${RESOURCES ? ` と ${RESOURCES} に記載の規約` : ''} を読むこと。
 問い: 呼び出し元への波及、規約違反、design が改変箇所と宣言していない場所への影響はないか。
+走査対象の全数列挙: 改変ファイルごとに呼び出し元を列挙して 1 件ずつ確認すること。
 
 ${COMMON_RULES}`,
   },
@@ -240,13 +253,15 @@ ${JSON.stringify(majors.map((f, index) => ({ index, severity: f.severity, title:
 
 台帳は追記のみ。既存行の書き換え・削除は禁止。`
 
-const refutePrompt = (f) => `以下のコードレビュー指摘を反証してください。指摘が誤りである可能性 —
+const refutePrompt = (f) => `以下のコードレビュー指摘を反証してください。指摘は recall 優先の発見係によるもので、
+偽陽性を多く含む前提です — この反証が唯一の精度ゲートです。指摘が誤りである可能性 —
 事実誤認、実際には到達不能なパス、既存仕様として正当な挙動 — を
-コードを読んで探すこと。反証の成否と根拠（ファイル:行）を報告すること。
+コードを読んで確認すること。真とも偽とも確定できない場合は refuted=false（生存 — 安全側）とする。
+反証の成否と根拠（ファイル:行）を報告すること。
 ${f.lane === 'mutation' ? '\nこの指摘は生存ミュータント由来。反証の争点は等価ミュータント（意味を変えない変異で、殺しようがない）かどうか。\n' : ''}
 指摘 [${f.severity}]: ${f.title}
 詳細: ${f.detail}
-根拠: ${f.evidence}
+根拠: ${f.evidence}${f.check ? `\n白黒を付ける確認手段（発見係の提案）: ${f.check}` : ''}
 レビュー対象の差分の取得コマンド: ${DIFF_CMD}`
 
 const verdictScribePrompt = (verdicts) => `指摘台帳 ${LEDGER} の処置列を反証結果で更新してください。対象行のみ編集し、他の行は触らないこと。
@@ -278,6 +293,10 @@ ${JSON.stringify(survivors.map(s => ({ id: s.id, severity: s.severity, lane: s.l
 - 修正した指摘は台帳の該当行（ID で特定）の処置列を「反映済」にし、根拠・理由セルに対応を一行で記録すること
 - 完了時に以下のゲートを自分で実行し、緑になるまで修正すること。生の出力の要点を gate_output で報告すること:
 ${GATES.map(g => `  - ${g}`).join('\n')}`
+
+const zeroRoundPrompt = (round) => `指摘台帳 ${LEDGER} の末尾に次の 1 行をそのまま追記してください。他の行は変更しないこと:
+
+<!-- round: C Rd=${round} 指摘なし -->`
 
 const judgePrompt = `次のコマンドを実行し、出力とコマンドの exit code を報告してください:
 ${CHECK} ledger ${LEDGER}
@@ -435,6 +454,13 @@ while (true) {
     // （過去ラウンド由来の再燃・停滞・形式不備を見逃さないため、再開セッションでも呼ぶ）
     let judge = null
     if (cRowsExist) {
+      if (verdicts.length === 0) {
+        // このラウンドは行を追記していない（指摘ゼロ / 全て反証済みの再生産）— マーカーが
+        // ないと check-docs は最後の行があるラウンドまでしか観測できず、過去の停滞パターン
+        // から escalated を返し続ける。「指摘なし」マーカーで今ラウンドを可視化する
+        await serializedLedger(() =>
+          agent(zeroRoundPrompt(round), { label: '台帳:ラウンド記録', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA }))
+      }
       judge = await agent(judgePrompt, { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
     }
     // 完了条件は check-docs の exit 0（形式不備なし）まで含む — 未処置行や欠番を残して
@@ -447,7 +473,7 @@ while (true) {
       minors,
       judgeNotes: judge
         ? (verdicts.length === 0
-          ? `最終ラウンドは指摘ゼロ（このラウンドの行が台帳に残らないため check-docs は既存行基準の判定を示す）: ${judge.notes || ''}`
+          ? `最終ラウンドは指摘ゼロ（「指摘なし」マーカーを台帳に記録済み）: ${judge.notes || ''}`
           : judge.notes || '')
         : '台帳に C 行なし（指摘ゼロのまま収束）',
       ledger: LEDGER,

@@ -30,6 +30,12 @@ spec.md の全 B 行について、以下の表を **`.dandori/specs/<feature>/t
 - `unit`/`e2e` は**このゲートで再実行する**。impl / codereview / refine 中の通過報告を根拠に流用しない。
   実行コマンドは plan.md の割り当てを使い、`.dandori/resources.md`（リソースマップ）に
   正準コマンドの定義があればそちらを優先する
+- 再実行の出力で **skipped / todo が 0 件**であることをランナーのサマリ行で機械確認する。
+  skip されたテストはスイートが緑でも実行されていない — B-ID を含むテストの skip は
+  偽 ✅ を生む。skipped > 0 なら該当テストを列挙し、B 行に対応するものは ⚠️ 未検証相当として
+  trace.md に反映し §3 の裁定対象に含める。`check-docs.ts trace` も同一行の
+  `.skip` / `.todo` / `xit` を T4 として検出するが、外側の `describe.skip` は行 grep では
+  見えない — サマリの skipped=0 確認が正
 - B 行↔テストの対応付けは、初期トレース表の生成で機械化されている:
   `node <dandori-repo>/skills/dandori/scripts/check-docs.ts trace <spec.md> <テストディレクトリ...>`
   が B-ID をテストコードから grep（impl の規約でテスト名に B-ID が入っている）して
