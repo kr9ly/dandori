@@ -40,7 +40,7 @@
  *   L1. 行形式 — ID 形式（R-n/C-n）/ Rd 数値 / 深刻度語彙（blocker/major/minor）/
  *       処置語彙（反映済・却下・保留・反証破棄・再燃→<ID>・空 = 未処置）
  *   L2. 処置の完全性 — 未処置の行 / 理由なしの却下・反証破棄 /
- *       blocker・major への保留（保留は minor のみ）/ 反証破棄の R-n 行（codereview 専用語彙）
+ *       blocker・major への保留（保留は minor のみ）
  *   L3. 再燃参照 — 再燃→<ID> の参照先が台帳にない
  *   L4. ID 重複・欠番（台帳は追記のみ — 欠番は行の削除の疑い）
  *   L5. ラウンド記録矛盾 — 「指摘なし」マーカーのラウンドに blocker/major の生存行がある
@@ -49,7 +49,7 @@
  *   （blocker/major の行を追記したラウンドでは不要）。
  *   収束判定（指摘とは別枠 — exit code に影響しない）:
  *     passed = 最新ラウンド（マーカーのみのラウンド含む）の blocker+major がゼロ
- *              （C-n は反証破棄を生存数から除外）
+ *              （反証破棄は R/C 共通で生存数から除外）
  *     escalated = 再燃→ がある（参照先が反証破棄の行は除く — 反証済みの再生産）、
  *                 または 3 ラウンド以上連続で blocker+major 件数が減っていない
  *     継続 = どちらでもない
@@ -745,9 +745,6 @@ if (mode === 'ledger') {
     if (r.action === '保留' && r.severity !== 'minor') {
       findings.push({ check: 'L2:処置の完全性', detail: `${r.id} (L${r.line}): ${r.severity} に保留は使えない — 保留は minor の採否待ちのみ` })
     }
-    if (r.action === '反証破棄' && r.prefix === 'R') {
-      findings.push({ check: 'L2:処置の完全性', detail: `${r.id} (L${r.line}): 反証破棄は codereview（C-n）専用の処置 — review に反証フェーズはない` })
-    }
   }
 
   // L3: 再燃参照
@@ -784,9 +781,10 @@ if (mode === 'ledger') {
     if (prows.length === 0 && zr.size === 0) continue
 
     // 生存数 = blocker/major のうち処置で無効化されていないもの。
-    // C-n は反証破棄（誤検出と確定）を除外する。再燃行は生存として数える
+    // 反証破棄（誤検出と確定）は R/C 共通で除外する（2026-07-09: review にも
+    // finder/verifier 分離を導入 — 反証フェーズは両工程の標準装備）。再燃行は生存として数える
     const survives = (r: LedgerRow): boolean =>
-      (r.severity === 'blocker' || r.severity === 'major') && !(prefix === 'C' && r.action === '反証破棄')
+      (r.severity === 'blocker' || r.severity === 'major') && r.action !== '反証破棄'
     // 「指摘なし」マーカーのラウンドも系列に含める（行がなければ生存数 0 として観測される）
     const rounds = [...new Set([...prows.map(r => r.rd), ...zr])].sort((a, b) => a - b)
     const counts = rounds.map(rd => prows.filter(r => r.rd === rd && survives(r)).length)
