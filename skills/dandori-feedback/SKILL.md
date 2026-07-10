@@ -98,8 +98,13 @@ dandori-spec へ巻き戻す（`Rev:` 付与の規約は spec 工程が引き継
 ### 5. コース再判定と再 gate 範囲の裁定
 
 - **コース再判定**: 改訂スコープに対してルーター §2 のトリアージ基準を再適用する。
-  元がフルコースでも、改訂が局所的なら短縮コースでよい（逆もある — 局所修正のつもりが
-  スキーマ変更を含むなら改訂はフル）。`course:` を更新し、変更したら台帳の根拠列に記録
+  - **cleanup 前のループでは昇格のみ**（short → full: 改訂が不可逆変更・外部接続等の
+    フル基準に該当する場合 — 巻き戻し先は最低 ground）。降格はしない —
+    phases_done が前サイクルのフルコース工程を記録しており降格は state 整合を壊すし、
+    巻き戻し先が浅ければ再走は自然に短い
+  - **done からの再開では自由に再判定**（phases_done はリセットされる）。
+    元がフルコースでも改訂が局所的なら短縮コースでよい
+  - `course:` を変更したら台帳の根拠列に記録
 - **再 gate 範囲**（**done からの再開のみ** — gate 直後の経路では B-ID が現役なので
   通常の全行トレースが機械で効き、この裁定は不要。`feedback.trace_scope` も書かない）:
   既定は**差分トレース**（`feedback.trace_scope: delta`）— 今回の revision の B 行だけを
@@ -118,10 +123,18 @@ dandori-spec へ巻き戻す（`Rev:` 付与の規約は spec 工程が引き継
 state.yaml を巻き戻し先に合わせて初期化し、該当工程スキルへ遷移する:
 
 - `phase:` を巻き戻し先（spec / ground / impl）に設定
-- `phases_done:` をリセット — spec 巻き戻しなら `[]`、§4 で spec 改訂済みなら `[spec]`
-- 再走する工程の per-phase セクション（review.rounds / impl.milestones_* /
-  codereview / refine 等）を初期状態に戻す — 前サイクルの記録は git 履歴が正。
-  sketch は改訂スコープで再トリアージする（UI に触れるか）
+- `phases_done:` を文脈に応じて巻き戻す:
+  - **cleanup 前のループ**: 巻き戻し先**以降**のフェーズだけを外す — それより前の成果物
+    （design.md / plan.md 等）は現役なので完了記録を残す（例: impl へ巻き戻し →
+    `[spec, sketch, ground, review, spike, plan]` を残し impl 以降を外す）
+  - **done からの再開**: 成果物は処分済み — 残せるのは spec のみ
+    （§4 で spec 改訂済みなら `[spec]`、spec 巻き戻しなら `[]`）
+- **plan.md が現役のまま impl へ巻き戻す場合**（cleanup 前・フルコース）、改訂で追加した
+  B 行のマイルストーン割り当てを plan.md に追記する — gate が plan カバレッジ検査を
+  再実行するため、未割り当ての B 行は ⚠️ になる（`check-docs.ts plan` で確認）
+- 再走する工程（巻き戻し先以降）の per-phase セクション（review.rounds /
+  impl.milestones_* / codereview / refine 等）を初期状態に戻す — 前サイクルの記録は
+  git 履歴が正。sketch は改訂スコープで再トリアージする（UI に触れるか）
 - `feedback.items:`（台帳の F 行数）を記録。done からの再開なら `feedback.trace_scope:` も
 - `node <dandori-repo>/skills/dandori/scripts/check-docs.ts state <state.yaml>` を通す
 
