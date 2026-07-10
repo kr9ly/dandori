@@ -35,9 +35,11 @@
  *       （spec か調査のどちらかに穴 — ground の完了条件）
  *
  * ledger モード — review-ledger.md の形式検査と収束判定:
- *   台帳（dandori-review / dandori-codereview 共用）をパースし、接頭辞ごと
+ *   台帳（dandori-review / dandori-codereview / dandori-feedback 共用）をパースし、接頭辞ごと
  *   （R-n = review / C-n = codereview — ラウンド系列が別）に収束状態を機械判定する。
- *   L1. 行形式 — ID 形式（R-n/C-n）/ Rd 数値 / 深刻度語彙（blocker/major/minor）/
+ *   F-n = feedback（外部の結論の受け入れ台帳。Rd は改訂サイクル番号）は収束判定の
+ *   対象外 — 完了条件は全項目の処置済み（L2）。
+ *   L1. 行形式 — ID 形式（R-n/C-n/F-n）/ Rd 数値 / 深刻度語彙（blocker/major/minor）/
  *       処置語彙（反映済・却下・保留・反証破棄・再燃→<ID>・空 = 未処置）
  *   L2. 処置の完全性 — 未処置の行 / 理由なしの却下・反証破棄 /
  *       blocker・major への保留（保留は minor のみ）
@@ -56,14 +58,17 @@
  *
  * state モード — state.yaml の整合検査（ルーターの再開判定の足場）:
  *   Y1. 語彙・形式 — course / phase / 各工程 status の語彙、数値フィールド、
- *       updated の日付形式、未知のキー
+ *       updated の日付形式、revision（2 以上の整数 — 継続改善サイクル）、未知のキー
  *   Y2. feature 一致 — feature がフィーチャーディレクトリ名と一致するか
  *   Y3. フェーズ整合 — phase が phases_done と矛盾しない / 短縮コースに存在しない
  *       工程が記録されていない / 完了済み工程の status・カウンタが完了状態か
- *       （例: phases_done に impl があるのに milestones_done < total）
+ *       （例: phases_done に impl があるのに milestones_done < total）/
+ *       feedback は gate 通過後のみ / done は cleanup 完了後のみ
  *   Y4. 成果物整合 — フェーズが前提とするドキュメント（spec.md / design.md / plan.md /
  *       review-ledger.md）の存在。phase: done では逆に使い捨てドキュメントの処分漏れを
- *       検出する（アーカイブ方針で意図的に残す場合は無視してよい）
+ *       検出する（アーカイブ方針で意図的に残す場合は無視してよい）。
+ *       phase: feedback は gate 後（成果物現役）と done 後の再開（処分済み）の
+ *       両文脈があるため spec.md の存在だけを要求する
  *
  * map モード — survey 成果物（.dandori/map/*.md）の証拠アンカー死活検査:
  *   dandori-survey verify の手順 1〜2（hash 比較 → 変更ファイル取得 → アンカー走査）を
@@ -87,6 +92,9 @@
  *   T4. skip されたテスト — B-ID を含むテスト行が .skip / .todo / xit 等で無効化されている
  *       （緑のスイートでも実行されない偽 ✅。同一行の検出のみ — 外側の describe.skip は
  *       行 grep では見えないため、gate のランナーサマリ skipped=0 確認が正）
+ *   --revision <n> で差分トレース（継続改善サイクルの gate）: Rev が n 未満（無印 = 初回）の
+ *   B 行は前サイクル検証済みの回帰扱い — B-ID の grep ヒットがなくても T1 を出さず、
+ *   スイート緑 + skipped/todo 0 での担保を表に明記する。対応の正は前サイクルの gate コミット
  *   grep 候補は B-数字 開始のトークンに限定する（フィクスチャ文字列の B-ORDER 等を
  *   幽霊と誤検出しない）。括弧はバランスを保って正規化し（B-15(b) を壊さない）、
  *   spec にない括弧サフィックス付き ID はパラメタライズ表記として基底 B-ID に帰属させる
@@ -104,7 +112,7 @@
  *     （fix 済み spec を再編集したとき: git show HEAD:<path> > /tmp/base.md で取り出す）
  *   node check-docs.ts plan <spec.md> <plan.md>
  *   node check-docs.ts design <spec.md> <design.md>
- *   node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...>
+ *   node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...> [--revision <n>]
  *   node check-docs.ts ledger <review-ledger.md>
  *   node check-docs.ts map <mapファイル.md...>（アンカーは map の git リポジトリルート相対）
  *   node check-docs.ts state <state.yaml>
@@ -188,9 +196,12 @@ interface SpecB {
   line: number
   /** 取り消し線つき（削除済み B 行） */
   struck: boolean
-  /** B 行ブロック内に存在するフィールド名（Given/When/Then/Gate/Covers） */
+  /** B 行ブロック内に存在するフィールド名（Given/When/Then/Gate/Covers/Rev） */
   fields: Set<string>
   gateRaw: string | null
+  /** 改訂サイクル番号（`- Rev: n` — dandori-feedback が改訂で追加した行に付与）。無印 = 初回サイクル */
+  rev: number | null
+  revRaw: string | null
   /** この B 行が属する ## セクション名 */
   section: string | null
 }
@@ -234,6 +245,8 @@ function parseSpec(lines: string[], path: string): ParsedSpec {
         struck: heading[1] !== undefined || title.includes('~~'),
         fields: new Set(),
         gateRaw: null,
+        rev: null,
+        revRaw: null,
         section: curSection,
       }
       bs.push(curB)
@@ -245,10 +258,14 @@ function parseSpec(lines: string[], path: string): ParsedSpec {
       return
     }
     if (curB) {
-      const m = line.match(/^\s*-\s*(Given|When|Then|Gate|Covers)\s*[:：]\s*(.*)$/)
+      const m = line.match(/^\s*-\s*(Given|When|Then|Gate|Covers|Rev)\s*[:：]\s*(.*)$/)
       if (m) {
         curB.fields.add(m[1])
         if (m[1] === 'Gate') curB.gateRaw = m[2].trim()
+        if (m[1] === 'Rev') {
+          curB.revRaw = m[2].trim()
+          curB.rev = /^[1-9]\d*$/.test(curB.revRaw) ? Number(curB.revRaw) : null
+        }
       }
     }
   })
@@ -264,7 +281,7 @@ const USAGE =
   'usage: node check-docs.ts spec <spec.md> [--baseline <旧spec.md>]\n' +
   '       node check-docs.ts plan <spec.md> <plan.md>\n' +
   '       node check-docs.ts design <spec.md> <design.md>\n' +
-  '       node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...>\n' +
+  '       node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...> [--revision <n>]\n' +
   '       node check-docs.ts ledger <review-ledger.md>\n' +
   '       node check-docs.ts map <mapファイル.md...>\n' +
   '       node check-docs.ts state <state.yaml>\n' +
@@ -322,6 +339,12 @@ if (mode === 'spec') {
       if (!b.fields.has(field)) {
         findings.push({ check: 'S3:B行フィールド欠落', detail: `${b.id} (L${b.line}) に ${field} がない` })
       }
+    }
+    if (b.revRaw !== null && b.rev === null) {
+      findings.push({
+        check: 'S8:Rev形式',
+        detail: `${b.id} (L${b.line}) の Rev「${b.revRaw}」が正の整数でない — 改訂サイクル番号（dandori-feedback が改訂で追加した行に付与する）`,
+      })
     }
     if (b.gateRaw !== null) {
       const tags = b.gateRaw.split(/[,、/\s]+/).filter(t => t !== '')
@@ -693,9 +716,9 @@ if (mode === 'ledger') {
     const cells = m[1].split('|').map(c => c.trim())
     if (cells.every(c => /^:?-+:?$/.test(c))) return // セパレータ行
     if (cells[0] === 'ID') return // ヘッダ行
-    const idm = cells[0].match(/^([RC])-(\d+)$/)
+    const idm = cells[0].match(/^([RCF])-(\d+)$/)
     if (!idm) {
-      findings.push({ check: 'L1:行形式', detail: `L${idx + 1}: ID「${cells[0]}」が R-n / C-n 形式でない` })
+      findings.push({ check: 'L1:行形式', detail: `L${idx + 1}: ID「${cells[0]}」が R-n / C-n / F-n 形式でない` })
       return
     }
     if (cells.length !== 6) {
@@ -756,7 +779,7 @@ if (mode === 'ledger') {
   }
 
   // L4: ID 重複・欠番（接頭辞ごと）
-  for (const prefix of ['R', 'C']) {
+  for (const prefix of ['R', 'C', 'F']) {
     const nums = rows.filter(r => r.prefix === prefix).map(r => r.num)
     if (nums.length === 0) continue
     const seen = new Set<number>()
@@ -772,7 +795,7 @@ if (mode === 'ledger') {
   // 収束判定（接頭辞ごと — R と C はラウンド系列が別）
   console.log(`# 台帳収束判定 — ${ledgerPath}`)
   const zrTotal = [...zeroRounds.values()].reduce((n, s) => n + s.size, 0)
-  console.log(`行 ${rows.length}（R: ${rows.filter(r => r.prefix === 'R').length} / C: ${rows.filter(r => r.prefix === 'C').length}）` +
+  console.log(`行 ${rows.length}（R: ${rows.filter(r => r.prefix === 'R').length} / C: ${rows.filter(r => r.prefix === 'C').length} / F: ${rows.filter(r => r.prefix === 'F').length}）` +
     (zrTotal > 0 ? ` / 指摘なしマーカー ${zrTotal}` : ''))
   console.log('')
   for (const [prefix, label] of [['R', 'dandori-review'], ['C', 'dandori-codereview']] as const) {
@@ -828,6 +851,19 @@ if (mode === 'ledger') {
     console.log('')
   }
 
+  // F（feedback）はラウンド収束の対象外 — 外部の結論の受け入れ台帳であり、
+  // 完了条件は全項目の処置済み（L2 の未処置検査が正）。Rd は改訂サイクル番号
+  {
+    const frows = rows.filter(r => r.prefix === 'F')
+    if (frows.length > 0) {
+      const count = (a: string) => frows.filter(r => r.action === a).length
+      console.log('## F（dandori-feedback）')
+      console.log(`項目 ${frows.length} / 反映済 ${count('反映済')} / 却下 ${count('却下')} / 保留 ${count('保留')} / 未処置 ${count('')}`)
+      console.log('収束判定の対象外 — 完了条件は未処置ゼロ（L2）')
+      console.log('')
+    }
+  }
+
   finishReport()
 }
 
@@ -864,15 +900,16 @@ if (mode === 'state') {
   })
 
   const FULL_ORDER = ['spec', 'sketch', 'ground', 'review', 'spike', 'plan', 'impl', 'codereview', 'refine', 'gate', 'cleanup']
-  const SHORT_PHASES = new Set(['spec', 'sketch', 'impl', 'codereview', 'refine', 'gate', 'cleanup']) // sketch/codereview/refine は短縮でも任意実施可
-  const PHASE_VOCAB = new Set([...FULL_ORDER, 'done'])
+  const SHORT_PHASES = new Set(['spec', 'sketch', 'impl', 'codereview', 'refine', 'gate', 'cleanup', 'feedback']) // sketch/codereview/refine は短縮でも任意実施可。feedback は両コース共通
+  // feedback は線形順序の外（done からの継続改善入口）— phases_done には入らない
+  const PHASE_VOCAB = new Set([...FULL_ORDER, 'done', 'feedback'])
 
   const str = (v: unknown): string | null => typeof v === 'string' ? v : null
   const section = (k: string): Record<string, string> =>
     typeof top[k] === 'object' ? top[k] as Record<string, string> : {}
 
   // Y1: 語彙・形式
-  const KNOWN_TOP = new Set(['feature', 'course', 'phase', 'phases_done', 'sketch', 'review', 'spike', 'impl', 'codereview', 'refine', 'cleanup', 'progress', 'updated'])
+  const KNOWN_TOP = new Set(['feature', 'course', 'phase', 'phases_done', 'revision', 'sketch', 'review', 'spike', 'impl', 'codereview', 'refine', 'cleanup', 'feedback', 'progress', 'updated'])
   for (const k of Object.keys(top)) {
     if (!KNOWN_TOP.has(k)) findings.push({ check: 'Y1:語彙・形式', detail: `未知のトップレベルキー: ${k}（正準定義は dandori ルーターの SKILL.md）` })
   }
@@ -883,6 +920,11 @@ if (mode === 'state') {
   const phase = str(top.phase)
   if (phase === null) findings.push({ check: 'Y1:語彙・形式', detail: 'phase がない' })
   else if (!PHASE_VOCAB.has(phase)) findings.push({ check: 'Y1:語彙・形式', detail: `phase「${phase}」は語彙外` })
+  // revision は改訂サイクルの記録 — どのフェーズでも許容（cleanup 前のループ中・done 後の再開後を通じて残る）
+  const revisionRaw = str(top.revision)
+  if (revisionRaw !== null && (!/^\d+$/.test(revisionRaw) || Number(revisionRaw) < 2)) {
+    findings.push({ check: 'Y1:語彙・形式', detail: `revision「${revisionRaw}」が 2 以上の整数でない — 初回サイクルは書かない（dandori-feedback が 2 から採番）` })
+  }
   const doneRaw = str(top.phases_done) ?? ''
   const phasesDone = doneRaw.replace(/^\[|\]$/g, '').split(',').map(s => s.trim()).filter(s => s !== '')
   for (const p of phasesDone) {
@@ -913,6 +955,13 @@ if (mode === 'state') {
   }
   const rounds = numeric('review', 'rounds')
   numeric('codereview', 'rounds')
+  numeric('feedback', 'items')
+  {
+    const ts = section('feedback')['trace_scope']
+    if (ts !== undefined && ts !== 'delta' && ts !== 'full') {
+      findings.push({ check: 'Y1:語彙・形式', detail: `feedback.trace_scope「${ts}」は語彙外 — delta / full` })
+    }
+  }
   // milestones_done は整数カウンタ（逐次実装）と ID リスト（並列実装 — 完了順が
   // マイルストーン番号順と一致しない場合に必要。dandori-impl workflow.js はこちらで記録）の両形式を受理する
   const milestonesDone = (): number | null => {
@@ -953,7 +1002,14 @@ if (mode === 'state') {
   if (phase === 'done' && !phasesDone.includes('gate')) {
     findings.push({ check: 'Y3:フェーズ整合', detail: 'phase: done なのに phases_done に gate がない — gate を通らずに done にはならない' })
   }
-  if (course === 'short') {
+  if (phase === 'feedback' && !phasesDone.includes('gate')) {
+    findings.push({ check: 'Y3:フェーズ整合', detail: 'phase: feedback なのに phases_done に gate がない — feedback は gate 通過後の安定点。gate を通らずに feedback にはならない' })
+  }
+  if (phase === 'done' && !phasesDone.includes('cleanup')) {
+    findings.push({ check: 'Y3:フェーズ整合', detail: 'phase: done なのに phases_done に cleanup がない — done は cleanup（店じまい）完了後のみ。改訂待ちなら phase: feedback が正' })
+  }
+  // phase: feedback の間は phases_done が前サイクル（コース再判定前）の記録 — 短縮コース検査は免除
+  if (course === 'short' && phase !== 'feedback') {
     for (const p of [phase, ...phasesDone]) {
       if (p !== null && p !== 'done' && !SHORT_PHASES.has(p)) {
         findings.push({ check: 'Y3:フェーズ整合', detail: `短縮コースに工程「${p}」は存在しない（spec → impl → gate — sketch / codereview / refine は任意実施のみ）` })
@@ -990,7 +1046,13 @@ if (mode === 'state') {
   const exists = (name: string): boolean => {
     try { statSync(join(featureDir, name)); return true } catch { return false }
   }
-  if (phase !== 'done') {
+  if (phase === 'feedback') {
+    // gate 後の安定点（成果物現役）と done 後の再開（処分済み）の両文脈があるため、
+    // 成果物の存在/処分はどちらも正常 — spec.md だけを前提として要求する
+    if (!exists('spec.md')) {
+      findings.push({ check: 'Y4:成果物整合', detail: 'phase: feedback なのに spec.md がない — 改訂は fix 済み spec への差分として入る' })
+    }
+  } else if (phase !== 'done') {
     const needs: [string, string, string][] = [
       ['spec', 'spec.md', 'spec 完了の成果物'],
       ['ground', 'design.md', 'ground 完了の成果物'],
@@ -1217,8 +1279,20 @@ function walkFiles(path: string, onFile: (path: string) => void): void {
 // ---- trace モード -----------------------------------------------------------------
 
 if (mode === 'trace') {
-  const paths = argvRest.slice(1)
-  if (paths.length < 2 || paths.some(p => p.startsWith('--'))) { console.error(USAGE); process.exit(2) }
+  let traceRevision: number | null = null
+  const paths: string[] = []
+  for (let i = 1; i < argvRest.length; i++) {
+    const a = argvRest[i]
+    if (a === '--revision') {
+      const v = argvRest[++i]
+      if (v === undefined || !/^[1-9]\d*$/.test(v)) { console.error(`--revision には正の整数を渡す\n${USAGE}`); process.exit(2) }
+      traceRevision = Number(v)
+      continue
+    }
+    if (a.startsWith('--')) { console.error(`未知のオプション: ${a}\n${USAGE}`); process.exit(2) }
+    paths.push(a)
+  }
+  if (paths.length < 2) { console.error(USAGE); process.exit(2) }
   const [specPath, ...scanRoots] = paths
   const spec = parseSpec(readLines(specPath, 'spec'), specPath)
 
@@ -1264,6 +1338,9 @@ if (mode === 'trace') {
   const NEEDS_TEST = new Set(['unit', 'e2e', 'formal'])
   console.log(`# 初期トレース表 — ${specPath}`)
   console.log(`走査: ${scanRoots.join(', ')}（${scannedFiles} ファイル）`)
+  if (traceRevision !== null) {
+    console.log(`差分トレース（revision ${traceRevision}）— Rev < ${traceRevision} の行は回帰扱い。対応の正は前サイクルの gate コミット（git 履歴）`)
+  }
   console.log('状態は実行前の初期値 — ゲート工程がテストを再実行して更新する')
   console.log('')
   console.log('| B 行 | ゲート | 状態 | 根拠 |')
@@ -1272,6 +1349,19 @@ if (mode === 'trace') {
     const tags = (b.gateRaw ?? '').split(/[,、/\s]+/).filter(t => t !== '')
     const gate = tags.join(', ') || '（Gate なし）'
     const found = expandRange(b.id).flatMap(id => hits.get(id) ?? [])
+    // 差分トレース: 前サイクルで検証済みの行（Rev が現 revision 未満 / 無印 = 初回）は
+    // 個別トレースを要求しない。cleanup で B-ID が剥がされた後でも偽 T1 を出さないため。
+    // ただしテストに B-ID が残っている行（cleanup skip プロジェクト等）は通常フローで再実行対象
+    const isOldRow = traceRevision !== null && (b.rev === null || b.rev < traceRevision)
+    if (isOldRow && found.length === 0) {
+      const prevRev = b.rev ?? 1
+      if (tags.some(t => NEEDS_TEST.has(t))) {
+        console.log(`| ${b.id} | ${gate} | ✅ 回帰 | Rev ${prevRev} 検証済み — 回帰はスイート緑 + skipped/todo 0 で担保 |`)
+      } else {
+        console.log(`| ${b.id} | ${gate} | ⏳ 回帰確認の要否を裁定 | Rev ${prevRev} で確認済み — 改訂の影響があれば再確認 |`)
+      }
+      continue
+    }
     if (tags.some(t => NEEDS_TEST.has(t))) {
       if (found.length > 0) {
         console.log(`| ${b.id} | ${gate} | ⏳ 要再実行 | ${found.join(', ')} |`)

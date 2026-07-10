@@ -57,10 +57,15 @@ dandori（入口・トリアージ）
   │   dandori-spec ──→ (dandori-sketch) ──→ dandori-ground ──→ dandori-review ──→ dandori-spike
   │   （仕様壁打ち）   （デザイン接地・UI時）   （前提の接地）      （独立レビュー）    （前提の実地検証）
   │        │                                                    │
-  │        │   dandori-cleanup ←── dandori-gate ←── dandori-refine ←── dandori-codereview ←── dandori-impl ←── dandori-plan
-  │        │   （クリーンアップ）   （最終ゲート） （リファインメント） （セルフコードレビュー）  （MS単位実装）    （計画）
+  │        │   dandori-feedback ←── dandori-gate ←── dandori-refine ←── dandori-codereview ←── dandori-impl ←── dandori-plan
+  │        │   （継続改善の裁定点）  （最終ゲート） （リファインメント） （セルフコードレビュー）  （MS単位実装）    （計画）
   │        │
-  └─ 短縮コース: dandori-spec（短縮） ──→ dandori-impl ──→ dandori-gate ──→ dandori-cleanup
+  └─ 短縮コース: dandori-spec（短縮） ──→ dandori-impl ──→ dandori-gate ──→ dandori-feedback
+
+  継続改善: dandori-feedback で裁定 —
+            結論の取込: （spec | ground | impl に巻き戻し）──→ 通常フローに再合流 ──→ gate ──→ feedback
+            結論待ち:   phase: feedback のまま待機（安定点）
+            完全に fix: dandori-cleanup（B-ID 除去 = 不可逆な店じまい）──→ done
 ```
 
 ユーザーとの接点は3つに集約される: 仕様の壁打ち、レビュー結果の裁定、最終ゲートの裁定。
@@ -176,7 +181,8 @@ cp -r dandori/skills/* <project>/.claude/skills/
 | `dandori-codereview` | セルフコードレビュー。テスト緑の diff を4レーン並列レビュー + 反証フェーズ |
 | `dandori-refine` | リファインメント。機械検査 + 3レーン（イディオム一致・再発明/簡素化・テスト品質）を1ラウンド適用 |
 | `dandori-gate` | 最終ゲート。全仕様行のトレース表 → コミット裁定 |
-| `dandori-cleanup` | クリーンアップ。プロセス言及（テスト名の B-ID 等）の除去 → フィーチャーのクローズ |
+| `dandori-feedback` | 継続改善の裁定点。外部の結論を台帳化 → フェーズ巻き戻しで改訂サイクル再走、完全 fix の裁定で cleanup へ |
+| `dandori-cleanup` | クリーンアップ。feedback の完全 fix 裁定後にプロセス言及（テスト名の B-ID 等）を除去 → フィーチャーのクローズ |
 | `dandori-survey` | 足場調査。コードベース分析を .dandori/map/ に生成・維持（工程外） |
 | `dandori-doctor` | 前提条件診断。各工程が依存する機械検査の基盤を実行確認し、整備の要/不要を提案（工程外） |
 

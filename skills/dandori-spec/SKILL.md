@@ -182,6 +182,9 @@ spec 全体の把握には手描きでなく **spec ツリー**（§5 参照 —
 
 B-n の ID は以降の全工程（plan のマイルストーン対応、gate のトレース表）から参照される。
 **fix 後の改番は禁止**。追加は末尾、削除は取り消し線 + 理由。
+継続改善の改訂サイクル（state.yaml に `revision: n` — dandori-feedback 経由）で追加した
+B 行には `- Rev: <n>` フィールドを付ける — gate の差分トレースが「今回検証すべき行」を
+識別する目印（初回サイクルの行は無印のまま）。
 fix 済み spec を再編集したときは改番検知を機械で掛ける:
 `git show HEAD:<spec.md> > /tmp/base.md` で旧版を取り出し、
 `node <dandori-repo>/skills/dandori/scripts/check-docs.ts spec <spec.md> --baseline /tmp/base.md`
