@@ -53,7 +53,8 @@
  *     passed = 最新ラウンド（マーカーのみのラウンド含む）の blocker+major がゼロ
  *              （反証破棄は R/C 共通で生存数から除外）
  *     escalated = 再燃→ がある（参照先が反証破棄の行は除く — 反証済みの再生産）、
- *                 または 3 ラウンド以上連続で blocker+major 件数が減っていない
+ *                 または 3 ラウンド以上連続で blocker+major 件数が減っておらず、かつ
+ *                 最新ラウンドに未解消の再燃が含まれる（2026-07-10 改定）
  *     継続 = どちらでもない
  *
  * state モード — state.yaml の整合検査（ルーターの再開判定の足場）:
@@ -828,11 +829,17 @@ if (mode === 'ledger') {
       const m = r.action.match(/^再燃→\s*(\S+)$/)
       return m !== null && rowById.get(m[1])?.action !== '反証破棄'
     })
-    // escalate 条件 2: 直近 3 ラウンドで blocker+major が減っていない（履歴上の過去の停滞窓は
-    // 数えない — 一度停滞しても以降のラウンドで回復したなら現在の停滞ではない）
+    // escalate 条件 2: 直近 3 ラウンドで blocker+major が減っておらず、かつ最新ラウンドに
+    // 未解消の再燃が含まれる（2026-07-10 改定: 件数の非減少だけでは「毎ラウンド異なる新規の
+    // 事実発見が続く健全な収束過程」と「解釈の振動」を区別できない — modelh-cart-core Rd1〜3 の
+    // 実戦観測。振動の実体は再燃検出が担う。未解消再燃は条件 1 が単体で escalate するため
+    // 本条件は現状その部分集合だが、条件 1 を将来緩めた場合の保険として明示的に残す。
+    // 履歴上の過去の停滞窓は数えない — 回復したなら現在の停滞ではない）
     const n = counts.length
+    const latestRd = rounds[n - 1]
     const stalled = n >= 3
       && counts[n - 1] >= counts[n - 2] && counts[n - 2] >= counts[n - 3] && counts[n - 1] > 0
+      && rekindled.some(r => r.rd === latestRd)
 
     // 通過条件（blocker+major ゼロのラウンド）が最優先 — SKILL.md の正準。
     // 停滞・再燃はゼロラウンドが出ていない場合の脱出弁
@@ -846,7 +853,7 @@ if (mode === 'ledger') {
     if (rekindled.length > 0) {
       console.log(`再燃: ${rekindled.map(r => `${r.id}（${r.action}）`).join(', ')} — 反映と指摘の間で解釈が振動している`)
     }
-    if (stalled) console.log('停滞: 3 ラウンド以上連続で blocker+major が減っていない')
+    if (stalled) console.log('停滞: 3 ラウンド以上連続で blocker+major が減っておらず、最新ラウンドに未解消の再燃がある')
     console.log(`判定: ${verdict}`)
     console.log('')
   }
