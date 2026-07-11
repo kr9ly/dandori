@@ -1,6 +1,6 @@
 ---
 name: dandori-cleanup
-description: dandori プロセスのクリーンアップ工程。gate 通過・コミット済みの実装からプロセス由来の言及（テスト名の B-ID、dandori 参照コメント）を除去し、dandori を知らない読者にも伝わるコードに整えてからフィーチャーをクローズする。dandori-feedback の「実装は完全に fix」裁定から遷移するか「クリーンアップしよう」で使う。
+description: dandori プロセスのクリーンアップ工程。gate 通過・コミット済みの実装からプロセス由来の言及（テスト名の B-ID、dandori 参照コメント）を除去し、dandori を知らない読者にも伝わるコードに整えてからフィーチャーをクローズする。dandori-annotate（コメント保全）の完了から遷移するか「クリーンアップしよう」で使う。
 ---
 
 # dandori-cleanup — プロセス言及の除去とクローズ
@@ -12,11 +12,14 @@ gate のコミットで「トレース可能なスナップショット」が履
 
 cleanup は不可逆な「店じまい」— B-ID を剥がすと以降の再 gate は機械突合が効かなくなる
 （git 履歴経由の差分トレースに落ちる）。だから **gate 直後ではなく、feedback 工程で
-「実装は完全に fix — 改訂はもう来ない」の裁定が出てから**実行する。
+「実装は完全に fix — 改訂はもう来ない」の裁定が出て、annotate 工程（design.md 等の
+処分で消える Why / Why not のコメント保全）を済ませてから**実行する — 除去（この工程）の
+前に付与（annotate）を終えておけば、付与されたコメントも residue 検査の対象に入る。
 
 ## 入口条件
 
-- state.yaml: `phase: cleanup`（gate 通過・コミット済み + feedback で完全 fix の裁定済み）
+- state.yaml: `phase: cleanup`（gate 通過・コミット済み + feedback で完全 fix の裁定済み +
+  annotate 完了済み — `phases_done` に annotate）
 - trace.md が存在する — B 行↔テストの対応の正であり、この工程の作業リスト。
   処分はこの工程の最後（§5）まで行わない。改訂サイクルを回したフィーチャーでは
   最後の gate の trace.md が全生存 B 行をカバーしている

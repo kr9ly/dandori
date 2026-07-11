@@ -64,7 +64,8 @@
  *   Y3. フェーズ整合 — phase が phases_done と矛盾しない / 短縮コースに存在しない
  *       工程が記録されていない / 完了済み工程の status・カウンタが完了状態か
  *       （例: phases_done に impl があるのに milestones_done < total）/
- *       feedback は gate 通過後のみ / done は cleanup 完了後のみ
+ *       feedback / annotate は gate 通過後のみ / cleanup は annotate 完了後のみ /
+ *       done は cleanup 完了後のみ
  *   Y4. 成果物整合 — フェーズが前提とするドキュメント（spec.md / design.md / plan.md /
  *       review-ledger.md）の存在。phase: done では逆に使い捨てドキュメントの処分漏れを
  *       検出する（アーカイブ方針で意図的に残す場合は無視してよい）。
@@ -906,8 +907,8 @@ if (mode === 'state') {
     }
   })
 
-  const FULL_ORDER = ['spec', 'sketch', 'ground', 'review', 'spike', 'plan', 'impl', 'codereview', 'refine', 'gate', 'cleanup']
-  const SHORT_PHASES = new Set(['spec', 'sketch', 'impl', 'codereview', 'refine', 'gate', 'cleanup', 'feedback']) // sketch/codereview/refine は短縮でも任意実施可。feedback は両コース共通
+  const FULL_ORDER = ['spec', 'sketch', 'ground', 'review', 'spike', 'plan', 'impl', 'codereview', 'refine', 'gate', 'annotate', 'cleanup']
+  const SHORT_PHASES = new Set(['spec', 'sketch', 'impl', 'codereview', 'refine', 'gate', 'annotate', 'cleanup', 'feedback']) // sketch/codereview/refine は短縮でも任意実施可。annotate/feedback は両コース共通
   // feedback は線形順序の外（done からの継続改善入口）— phases_done には入らない
   const PHASE_VOCAB = new Set([...FULL_ORDER, 'done', 'feedback'])
 
@@ -916,7 +917,7 @@ if (mode === 'state') {
     typeof top[k] === 'object' ? top[k] as Record<string, string> : {}
 
   // Y1: 語彙・形式
-  const KNOWN_TOP = new Set(['feature', 'course', 'phase', 'phases_done', 'revision', 'sketch', 'review', 'spike', 'impl', 'codereview', 'refine', 'cleanup', 'feedback', 'progress', 'updated'])
+  const KNOWN_TOP = new Set(['feature', 'course', 'phase', 'phases_done', 'revision', 'sketch', 'review', 'spike', 'impl', 'codereview', 'refine', 'annotate', 'cleanup', 'feedback', 'progress', 'updated'])
   for (const k of Object.keys(top)) {
     if (!KNOWN_TOP.has(k)) findings.push({ check: 'Y1:語彙・形式', detail: `未知のトップレベルキー: ${k}（正準定義は dandori ルーターの SKILL.md）` })
   }
@@ -943,6 +944,7 @@ if (mode === 'state') {
     spike: new Set(['pending', 'done', 'skipped']),
     codereview: new Set(['in_progress', 'passed', 'escalated', 'skipped']),
     refine: new Set(['pending', 'done', 'skipped']),
+    annotate: new Set(['pending', 'done', 'skipped']),
     cleanup: new Set(['pending', 'done', 'skipped']),
   }
   for (const [sec, vocab] of Object.entries(STATUS_VOCAB)) {
@@ -990,6 +992,7 @@ if (mode === 'state') {
   const mTotal = numeric('impl', 'milestones_total')
   numeric('refine', 'applied')
   numeric('refine', 'rejected')
+  numeric('annotate', 'annotated')
   const updated = str(top.updated)
   if (updated !== null && !/^\d{4}-\d{2}-\d{2}$/.test(updated)) {
     findings.push({ check: 'Y1:語彙・形式', detail: `updated「${updated}」が YYYY-MM-DD 形式でない` })
@@ -1015,6 +1018,12 @@ if (mode === 'state') {
   if (phase === 'done' && !phasesDone.includes('cleanup')) {
     findings.push({ check: 'Y3:フェーズ整合', detail: 'phase: done なのに phases_done に cleanup がない — done は cleanup（店じまい）完了後のみ。改訂待ちなら phase: feedback が正' })
   }
+  if (phase === 'annotate' && !phasesDone.includes('gate')) {
+    findings.push({ check: 'Y3:フェーズ整合', detail: 'phase: annotate なのに phases_done に gate がない — annotate（コメント保全）は feedback の完全 fix 裁定後、つまり gate 通過後' })
+  }
+  if (phase === 'cleanup' && !phasesDone.includes('annotate')) {
+    findings.push({ check: 'Y3:フェーズ整合', detail: 'phase: cleanup なのに phases_done に annotate がない — cleanup（除去）の前に annotate（消える Why のコメント保全）を通す' })
+  }
   // phase: feedback の間は phases_done が前サイクル（コース再判定前）の記録 — 短縮コース検査は免除
   if (course === 'short' && phase !== 'feedback') {
     for (const p of [phase, ...phasesDone]) {
@@ -1035,6 +1044,7 @@ if (mode === 'state') {
     ['spike', ['done', 'skipped']],
     ['codereview', ['passed', 'escalated', 'skipped']],
     ['refine', ['done', 'skipped']],
+    ['annotate', ['done', 'skipped']],
     ['cleanup', ['done', 'skipped']],
   ]
   for (const [sec, ok] of doneNeedsStatus) {
