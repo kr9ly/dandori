@@ -1090,12 +1090,17 @@ if (mode === 'state') {
       findings.push({ check: 'Y4:成果物整合', detail: 'phase: cleanup なのに trace.md がない — cleanup の作業リスト（gate はクローズで trace.md を処分しない）' })
     }
   } else {
-    if (!exists('spec.md')) {
-      findings.push({ check: 'Y4:成果物整合', detail: 'phase: done なのに spec.md がない — spec.md は長寿命ドキュメントとして残す' })
-    }
-    for (const file of ['sketch.md', 'plan.md', 'trace.md', 'review-ledger.md']) {
+    // 既定運用（docs/appendix-records.md）では spec.md 含む全ドキュメントを
+    // 墓碑コミットで処分してクローズする — 残っていたら処分漏れの疑い
+    for (const [file, hint] of [
+      ['spec.md', '.dandori/records.md の retain 宣言で意図的に残すなら無視してよい'],
+      ['sketch.md', 'アーカイブ方針で意図的に残すなら無視してよい'],
+      ['plan.md', 'アーカイブ方針で意図的に残すなら無視してよい'],
+      ['trace.md', 'アーカイブ方針で意図的に残すなら無視してよい'],
+      ['review-ledger.md', 'アーカイブ方針で意図的に残すなら無視してよい'],
+    ] as [string, string][]) {
       if (exists(file)) {
-        findings.push({ check: 'Y4:成果物整合', detail: `phase: done なのに ${file} が残っている — クローズ手順の処分漏れの疑い（アーカイブ方針で意図的に残すなら無視してよい）` })
+        findings.push({ check: 'Y4:成果物整合', detail: `phase: done なのに ${file} が残っている — クローズ手順（墓碑コミット）の処分漏れの疑い（${hint}）` })
       }
     }
   }

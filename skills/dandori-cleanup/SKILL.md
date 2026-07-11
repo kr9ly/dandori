@@ -71,6 +71,19 @@ gate のコミットとは**分離した専用コミット**にする — 直前
 
 コミット完了後、**この順序で**行う（昇格元の処分が先行すると知見が失われる）:
 
+処分は**墓碑コミット**として行う（正準定義: `docs/appendix-records.md`）: spec.md を
+含むフィーチャードキュメント一式を削除し、annotate が「## Why 保全」節（design.md 末尾、
+短縮コースでは trace.md 末尾）に下書きしたコミット記録（`Decision:` / `Dropped:` /
+`Test-Strategy:` 等の固定キー行 + `Spec-Tombstone:` trailer）を処分コミットのメッセージに
+転写する。§4 の B-ID 除去コミットとは分ける — 削除コミットを `git log --diff-filter=D` で
+特定すれば蒸留メモと全文書の最終版（親コミット）に同時に届く。
+
+処分前の確認2点。push 型項目（未解決リスク・分離タスク）が annotate でタスク置き場へ
+転送済みであること — 未転送が残っていたら処分せず annotate に差し戻す。
+`.dandori/records.md` の必須宣言（タスク置き場・マージ方式）が揃っていること —
+欠けていれば補完を壁打ちし、タスク置き場を宣言できないプロジェクトは
+`方式: retain`（spec.md 残置）に倒す。
+
 1. `.dandori/map/` が存在すれば、dandori-survey の **update + promote** の実行を
    提案する — update は今回のコード変更の map への反映、promote は design.md /
    trace.md に蓄積されたフロー知見（実行検証済の既存コード挙動、不変条件、
@@ -79,7 +92,9 @@ gate のコミットとは**分離した専用コミット**にする — 直前
    宣言した writers/readers の増減を states.md に反映するのも update の一部
 2. sketch.md・plan.md・trace.md・review-ledger.md は役目を終える（削除 or アーカイブ。リポジトリ方針に従う）
 3. design.md は発見ログの spec 還流（dandori-gate §3）を済ませた上で同様に処分してよい
-4. spec.md は長寿命ドキュメントとして残す
+4. spec.md も墓碑コミットで処分する（既定 — 正はソースコード + テスト、過去の判断は
+   コミット履歴と ADR。改訂が来たら feedback が墓碑の親から復元する）。
+   `方式: retain` を宣言したプロジェクトのみ長寿命ドキュメントとして残す
 5. state.yaml: `phase: done`、`cleanup.status: done`、`phases_done` に cleanup 追加
 
 ## スキップ
@@ -92,5 +107,6 @@ B-ID つきの名前をコード上に残す方針のプロジェクト（トレ
 ## 完了条件
 
 - residue exit 0 + ゲート緑 + cleanup コミット済み（または skipped 裁定）
-- クローズ手順完了（使い捨てドキュメント処分・spec 残置）
+- クローズ手順完了 — 墓碑コミットでフィーチャードキュメント一式を処分
+  （retain 宣言時は spec.md のみ残置）
 - state.yaml: `phase: done`
