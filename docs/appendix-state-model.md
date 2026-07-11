@@ -191,6 +191,10 @@ node <dandori-repo>/skills/dandori-spec/scripts/render-spec-tree.ts <spec.md> --
   裁定のふりの第三者検査点は review が唯一（dandori-review の指示テンプレート参照）
 - ground 工程は「ground 送り項目」を確認項目として消化し、確定結果をモデルに
   書き戻す（`ground:` エントリを `orthogonal`/`dependent` に昇格、`?` を外す）
+- ground 工程は加えて**軸対応**（design.md「軸対応」節 — dandori-ground 参照）で
+  各軸とコード構造の対応を確定する（`check-docs.ts design` D5 が機械検査）。
+  直交宣言の列所有権型 reason（「P_n は X 列のみ触る」）は実装のモジュール境界への
+  構造要求としてここで接地される
 - gate 工程では B 行の増減後にチェッカーを再実行する（末尾追加・改番禁止の
   既存ルールとそのまま整合）。**gate 時点で ground 送り項目が残っていたら要裁定** —
   未消化の確認項目はトレース表の ⚠️ と同格に扱う

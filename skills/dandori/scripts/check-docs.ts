@@ -33,6 +33,10 @@
  *   D3. B 行参照整合 — 土台/改変箇所/新規実装が参照する B-ID の幽霊・削除済み検出
  *   D4. 未対応 B 行 — spec の B 行が土台/改変/新規のどこにも対応しない
  *       （spec か調査のどちらかに穴 — ground の完了条件）
+ *   D5. 軸対応 — spec に状態モデルがあるとき、## 軸対応 節が全軸を判定語彙
+ *       （[1箇所] / [散在: 理由] / ⚠）つきでカバーしているか。軸キーの typo・
+ *       1 軸複数エントリ・理由なし [散在] も検出（モデル自体の検査は
+ *       check-state-model.ts の管轄 — ここでは axes のキーだけ読む）
  *
  * ledger モード — review-ledger.md の形式検査と収束判定:
  *   台帳（dandori-review / dandori-codereview / dandori-feedback 共用）をパースし、接頭辞ごと
@@ -571,7 +575,8 @@ if (mode === 'design') {
   const paths = argvRest.slice(1)
   if (paths.length !== 2 || paths.some(p => p.startsWith('--'))) { console.error(USAGE); process.exit(2) }
   const [specPath, designPath] = paths
-  const spec = parseSpec(readLines(specPath, 'spec'), specPath)
+  const specLines = readLines(specPath, 'spec')
+  const spec = parseSpec(specLines, specPath)
   const designLines = readLines(designPath, 'design')
 
   const specIds = new Set(spec.bs.flatMap(b => expandRange(b.id)))
@@ -673,9 +678,87 @@ if (mode === 'design') {
     }
   }
 
+  // D5: 軸対応 — spec に状態モデルがあるとき、全軸がコード構造に対応付いているか
+  const axisKeys: string[] = []
+  {
+    let inModel = false
+    let inAxes = false
+    for (const line of specLines) {
+      if (!inModel) {
+        if (/^```dandori-state-model\s*$/.test(line.trim())) inModel = true
+        continue
+      }
+      if (/^```\s*$/.test(line.trim())) break
+      if (/^axes:\s*$/.test(line)) { inAxes = true; continue }
+      if (/^\S/.test(line)) { inAxes = false; continue } // 次のトップレベルキー
+      if (inAxes) {
+        const m = line.match(/^  ([A-Za-z_]\w*):\s*(\{.*\})?\s*$/)
+        if (m) axisKeys.push(m[1])
+      }
+    }
+  }
+  const axisEntries = sections.get('軸対応')
+  if (axisKeys.length > 0) {
+    if (!axisEntries) {
+      findings.push({
+        check: 'D5:軸対応',
+        detail: 'spec に状態モデルがあるのに ## 軸対応 がない（正準定義 — 全軸をコード構造に接地する）',
+      })
+    } else {
+      const covered = new Map<string, number>() // 軸キー → エントリ行
+      for (const e of axisEntries) {
+        const head = e.text.match(/^- ([^:：[]+)[:：]/)
+        if (!head) {
+          findings.push({
+            check: 'D5:軸対応',
+            detail: `軸対応エントリ (L${e.line}) が「- <軸キー>: ...」形式でない: ${e.text.slice(0, 60)}`,
+          })
+          continue
+        }
+        const keys = head[1].split(/[,、]/).map(s => s.trim()).filter(Boolean)
+        for (const k of keys) {
+          if (!axisKeys.includes(k)) {
+            findings.push({
+              check: 'D5:軸対応',
+              detail: `軸対応 (L${e.line}) の軸キー「${k}」が状態モデルにない — typo かモデルの陳腐化`,
+            })
+          } else if (covered.has(k)) {
+            findings.push({
+              check: 'D5:軸対応',
+              detail: `軸「${k}」の対応が複数エントリにある（L${covered.get(k)} と L${e.line}）— 1 軸 1 エントリ`,
+            })
+          } else {
+            covered.set(k, e.line)
+          }
+        }
+        const verdict = e.text.match(/\[1箇所\]|\[散在[:：]([^\]]*)\]|\[散在\]|⚠/)
+        if (!verdict) {
+          findings.push({
+            check: 'D5:軸対応',
+            detail: `軸対応 (L${e.line}) に判定（[1箇所] / [散在: 理由] / ⚠）がない`,
+          })
+        } else if (verdict[0].startsWith('[散在') && !(verdict[1] ?? '').trim()) {
+          findings.push({
+            check: 'D5:軸対応',
+            detail: `軸対応 (L${e.line}) の [散在] に理由がない — dependent 宣言等の相互作用根拠を書く（書けないなら ⚠ + 行き先）`,
+          })
+        }
+      }
+      for (const k of axisKeys) {
+        if (!covered.has(k)) {
+          findings.push({
+            check: 'D5:軸対応',
+            detail: `軸「${k}」が軸対応節にない — 全軸の対応をコード構造に接地する（散在なら理由つきで）`,
+          })
+        }
+      }
+    }
+  }
+
   console.log(`# design 検査レポート — ${specPath} ↔ ${designPath}`)
   console.log(`セクション ${sections.size} / 土台エントリ ${(sections.get('土台') ?? []).length}` +
-    ` / B 行参照 ${referenced.size}`)
+    ` / B 行参照 ${referenced.size}` +
+    (axisKeys.length > 0 ? ` / 状態モデル軸 ${axisKeys.length}（軸対応エントリ ${(axisEntries ?? []).length}）` : ''))
   console.log('')
   finishReport()
 }
