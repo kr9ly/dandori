@@ -9,7 +9,10 @@
  *   S1. 必須セクション欠落 — ゴール / スコープ外 / 振る舞い仕様 / 未解決事項
  *   S2. セクション重複 — 同名の ## セクションが複数（逐次追記の事故検出）
  *   S3. B 行フィールド欠落 — Given / When / Then / Gate が揃っているか
- *   S4. Gate タグ語彙 — unit / e2e / visual / manual / formal 以外の混入
+ *   S4. Gate タグ語彙 — unit / e2e / visual / manual / formal 以外の混入。
+ *       末尾の（）注記は文法の一部として無視する（固定単位・固定方法の宣言 — dandori-spec §4）。
+ *       乖離マーク `<現状>→<希望>`（例: e2e→unit）は両辺を語彙検査し、注記（阻害要因）を必須と
+ *       する。乖離行は指摘とは別枠で列挙する（ground の seam 議題リスト — exit code に影響しない）
  *   S5. B-ID 重複
  *   S6. B 行の位置 — 「## 振る舞い仕様」セクション外の B 行見出し
  *   S7. 欠番 — 純数値 ID（B-1 形式）の連番の穴（削除は取り消し線で残す規約のため、
@@ -279,6 +282,18 @@ function parseSpec(lines: string[], path: string): ParsedSpec {
   return { sections, bs }
 }
 
+// Gate タグ式のパース: 末尾の注記（…）を切り離し、タグ列と乖離マーク（<現状>→<希望>）を分解する。
+// current は現状の固定方法（乖離マークは左辺）— gate のトレースはこちらで扱う
+const GATE_VOCAB = new Set(['unit', 'e2e', 'visual', 'manual', 'formal'])
+function parseGateExpr(raw: string): { tokens: string[]; current: string[]; note: string | null } {
+  const cut = raw.search(/[（(]/)
+  const expr = (cut >= 0 ? raw.slice(0, cut) : raw).trim()
+  const note = cut >= 0 ? raw.slice(cut).trim() : null
+  const tokens = expr.split(/[,、/\s]+/).filter(t => t !== '')
+  const current = tokens.map(t => t.split(/→|->/)[0]).filter(t => t !== '')
+  return { tokens, current, note }
+}
+
 // ---- 引数 ------------------------------------------------------------------------
 
 const argvRest = process.argv.slice(2)
@@ -339,7 +354,7 @@ if (mode === 'spec') {
   }
 
   // S3 / S4: B 行フィールドと Gate タグ語彙（削除済み行は対象外）
-  const GATE_VOCAB = new Set(['unit', 'e2e', 'visual', 'manual', 'formal'])
+  const gateDesires: { id: string; line: number; token: string; note: string }[] = []
   for (const b of spec.bs.filter(b => !b.struck)) {
     for (const field of ['Given', 'When', 'Then', 'Gate']) {
       if (!b.fields.has(field)) {
@@ -353,16 +368,41 @@ if (mode === 'spec') {
       })
     }
     if (b.gateRaw !== null) {
-      const tags = b.gateRaw.split(/[,、/\s]+/).filter(t => t !== '')
-      if (tags.length === 0) {
+      const { tokens, note } = parseGateExpr(b.gateRaw)
+      if (tokens.length === 0) {
         findings.push({ check: 'S4:Gateタグ語彙', detail: `${b.id} (L${b.line}) の Gate が空` })
       }
-      for (const t of tags) {
-        if (!GATE_VOCAB.has(t)) {
+      for (const t of tokens) {
+        const parts = t.split(/→|->/)
+        if (parts.length > 2 || parts.some(p => p === '')) {
           findings.push({
             check: 'S4:Gateタグ語彙',
-            detail: `${b.id} (L${b.line}) の Gate タグ「${t}」は語彙外 — unit / e2e / visual / manual / formal のいずれか`,
+            detail: `${b.id} (L${b.line}) の Gate タグ「${t}」の形式が不正 — <タグ> または <現状>→<希望>`,
           })
+          continue
+        }
+        for (const p of parts) {
+          if (!GATE_VOCAB.has(p)) {
+            findings.push({
+              check: 'S4:Gateタグ語彙',
+              detail: `${b.id} (L${b.line}) の Gate タグ「${p}」は語彙外 — unit / e2e / visual / manual / formal のいずれか`,
+            })
+          }
+        }
+        if (parts.length === 2 && parts[0] === parts[1]) {
+          findings.push({
+            check: 'S4:Gateタグ語彙',
+            detail: `${b.id} (L${b.line}) の乖離マーク「${t}」の両辺が同一 — 乖離がないなら素のタグにする`,
+          })
+        }
+        if (parts.length === 2 && note === null) {
+          findings.push({
+            check: 'S4:Gateタグ語彙',
+            detail: `${b.id} (L${b.line}) の乖離マーク「${t}」に注記がない — 何が ${parts[1]} での固定を阻むかを（）で書く`,
+          })
+        }
+        if (parts.length === 2) {
+          gateDesires.push({ id: b.id, line: b.line, token: t, note: note ?? '（注記なし）' })
         }
       }
     }
@@ -454,6 +494,14 @@ if (mode === 'spec') {
     `（削除済み ${spec.bs.filter(b => b.struck).length}）` +
     (baselinePath !== null ? ` / baseline: ${baselinePath}` : ''))
   console.log('')
+  if (gateDesires.length > 0) {
+    // 指摘とは別枠（exit code に影響しない）— ground の seam 検討の議題リスト
+    console.log(`## 固定単位の乖離（${gateDesires.length} 件 — 指摘ではない。ground の seam 議題）`)
+    for (const d of gateDesires) {
+      console.log(`- ${d.id} (L${d.line}) ${d.token} ${d.note}`)
+    }
+    console.log('')
+  }
   finishReport()
 }
 
@@ -1451,8 +1499,10 @@ if (mode === 'trace') {
   console.log('| B 行 | ゲート | 状態 | 根拠 |')
   console.log('|------|--------|------|------|')
   for (const b of spec.bs.filter(b => !b.struck)) {
-    const tags = (b.gateRaw ?? '').split(/[,、/\s]+/).filter(t => t !== '')
-    const gate = tags.join(', ') || '（Gate なし）'
+    // 乖離マーク（e2e→unit）は左辺 = 現状の固定方法で扱う。注記はトレース表では落とす
+    const parsed = parseGateExpr(b.gateRaw ?? '')
+    const tags = parsed.current
+    const gate = parsed.tokens.join(', ') || '（Gate なし）'
     const found = expandRange(b.id).flatMap(id => hits.get(id) ?? [])
     // 差分トレース: 前サイクルで検証済みの行（Rev が現 revision 未満 / 無印 = 初回）は
     // 個別トレースを要求しない。cleanup で B-ID が剥がされた後でも偽 T1 を出さないため。
