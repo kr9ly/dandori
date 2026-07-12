@@ -282,6 +282,9 @@ cp -r dandori/skills/* <project>/.claude/skills/
 - [docs/appendix-records.md](docs/appendix-records.md) — コミット記録運用の正準定義。
   spec.md を墓碑コミットへ蒸留して処分する代替運用。.dandori/records.md の宣言形式、
   固定キー語彙、復元手順、pull 型/push 型の境界
+- [docs/appendix-re-agile.md](docs/appendix-re-agile.md) — 再・アジャイル
+  ソフトウェア開発宣言。原典のアンチテーゼ（秤にかけて片方を選ぶ）に対する
+  ジンテーゼ（両方を取る）として、dandori の価値観を宣言の形に凝縮
 - [docs/philosophy.md](docs/philosophy.md) — 理論的背景。ATDD / V字モデル /
   correct by construction との系譜、既存スペック駆動ツールとの差分、
   なぜエージェント時代にこのプロセスが経済的に成立するのか、
