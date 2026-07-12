@@ -255,7 +255,8 @@ cp -r dandori/skills/* <project>/.claude/skills/
   固定キー語彙、復元手順、pull 型/push 型の境界
 - [docs/philosophy.md](docs/philosophy.md) — 理論的背景。ATDD / V字モデル /
   correct by construction との系譜、既存スペック駆動ツールとの差分、
-  なぜエージェント時代にこのプロセスが経済的に成立するのか
+  なぜエージェント時代にこのプロセスが経済的に成立するのか、
+  テスト容易性（5性質）と仕様表現度のレバレッジ経済
 
 ## License
 
