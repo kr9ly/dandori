@@ -256,7 +256,7 @@ cp -r dandori/skills/* <project>/.claude/skills/
 - [docs/philosophy.md](docs/philosophy.md) — 理論的背景。ATDD / V字モデル /
   correct by construction との系譜、既存スペック駆動ツールとの差分、
   なぜエージェント時代にこのプロセスが経済的に成立するのか、
-  テスト容易性（5性質）と仕様表現度のレバレッジ経済
+  テスト容易性の5性質（DRIVE）と仕様表現度のレバレッジ経済
 
 ## License
 
