@@ -22,6 +22,9 @@
  *       末尾以外への挿入（追加は末尾の規約違反）
  *
  * plan モード — spec.md ↔ plan.md の B 行カバレッジ突合:
+ *   B-ID 参照は trace と同じ帰属規則で解決する — 注記括弧つき（B-36(計算) 等。空白・
+ *   全角文字で途切れたトークンを含む）は基底 ID が spec にあればそちらに帰属、
+ *   数値開始でないトークン（B-ORDER 等）は参照として扱わない。design モードも同様。
  *   P1. 未カバー B 行 — spec の B 行がどのマイルストーンにも割り当てられていない
  *       （= 実装されない仕様）
  *   P2. 幽霊参照 — plan が参照する B-ID が spec に存在しない（typo か spec の陳腐化）
@@ -32,7 +35,9 @@
  *   D1. 必須セクション欠落 — 土台 / 改変箇所 / 新規実装 / 不変条件 /
  *       リスクランキング / 発見ログ（見出しの（）補足は無視して前方一致）
  *   D2. 検証マーク — 土台の各エントリに [実行検証済] / [読解のみ] が付いているか。
- *       [実行検証済] は再実行可能な証拠形式（バッククォートのコマンド併記）を要求
+ *       [実行検証済] は再実行可能な証拠形式（バッククォートのコマンド併記）を要求。
+ *       エントリはインデントされた継続行を含めて 1 エントリとして読む。### サブ見出しに
+ *       マークを付けたグループ（配下のエントリ群にまとめて適用）も認める
  *   D3. B 行参照整合 — 土台/改変箇所/新規実装が参照する B-ID の幽霊・削除済み検出
  *   D4. 未対応 B 行 — spec の B 行が土台/改変/新規のどこにも対応しない
  *       （spec か調査のどちらかに穴 — ground の完了条件）
@@ -84,7 +89,7 @@
  *   機械化する。腐った主張の裁定・修正は verify 工程（ユーザー裁定）に残る。
  *   検査対象アンカー: 散文の「根拠: `パス`」と、dandori-state-map ブロックの anchor: 値
  *   V1. generated-at — ヘッダ欠落 / hash が git に存在しない（rebase 等で消失）
- *   V2. アンカー先消滅 — ファイル/ディレクトリなし、:行 が EOF 超え、
+ *   V2. アンカー先消滅 — ファイル/ディレクトリなし、:行 / :開始-終了（行範囲）が EOF 超え、
  *       :シンボル がファイル内に見つからない（確実に腐っている）
  *   V3. アンカー先変更 — generated-at hash..HEAD の変更ファイルに載っている
  *       （要再検証候補 — 主張がまだ真かはコードを読んで裁定する）
@@ -226,6 +231,25 @@ function expandRange(idToken: string): string[] {
   const from = Number(m[1]), to = Number(m[2])
   if (from >= to) { fail(`範囲 ID の順序が不正: ${idToken}`); return [idToken] }
   return Array.from({ length: to - from + 1 }, (_, i) => `B-${from + i}`)
+}
+
+/**
+ * plan/design の参照トークンを spec の B-ID 群に解決する。注記括弧つき参照
+ * （B-36(計算) / B-43〜B-45(client) や、空白・全角文字でトークンが途切れた
+ * B-36( / B-13(EAW）は、範囲を展開した上で基底 ID が spec にあればそちらに
+ * 帰属させる（trace の帰属規則と同じ方針）。B-ID 候補でないもの
+ * （B-ORDER 等のフィクスチャ文字列）は空配列
+ */
+function resolveBIdRefs(raw: string, specIds: Set<string>): string[] {
+  const norm = normalizeBIdToken(raw)
+  if (norm === null) return []
+  // 純数値範囲の直後の注記括弧は範囲判定の前に落とす（B-43〜B-45(client)）
+  const tok = norm.replace(/^(B-\d+〜B-\d+)\(.*$/, '$1')
+  return expandRange(tok).map(part => {
+    if (specIds.has(part)) return part
+    const base = part.split('(')[0]
+    return specIds.has(base) ? base : part
+  })
 }
 
 function parseSpec(lines: string[], path: string): ParsedSpec {
@@ -528,29 +552,33 @@ if (mode === 'plan') {
   }
   function collectRefs(m: Milestone, text: string, line: number): void {
     for (const tok of text.match(/B-[\w.()]+(?:〜B-[\w.()]+)?/g) ?? []) {
-      for (const id of expandRange(tok)) {
+      for (const id of resolveBIdRefs(tok, specIds)) {
         if (!m.refs.has(id)) m.refs.set(id, line)
       }
     }
   }
 
   let curM: Milestone | null = null
+  let inTaioCont = false // 「- 対応:」行の直後 — インデントされた継続行（折り返し・ネスト）も参照源にする
   let inFence = false
   planLines.forEach((line, idx) => {
     if (/^```/.test(line.trim())) { inFence = !inFence; return }
     if (inFence) return
     const sec = line.match(/^##\s+(M[\w.]+)\s*[:：]/)
-    if (sec) { curM = milestone(sec[1], idx + 1); return }
-    if (/^#{1,6}\s/.test(line)) { curM = null; return }
+    if (sec) { curM = milestone(sec[1], idx + 1); inTaioCont = false; return }
+    if (/^#{1,6}\s/.test(line)) { curM = null; inTaioCont = false; return }
     const cells = line.trim().match(/^\|(.+)\|$/)
     if (cells) {
+      inTaioCont = false
       const parts = cells[1].split('|').map(c => c.trim())
       if (/^M[\w.]+$/.test(parts[0])) {
         collectRefs(milestone(parts[0], idx + 1), parts.slice(1).join(' '), idx + 1)
       }
       return
     }
-    if (curM && /^\s*-\s*対応\s*[:：]/.test(line)) collectRefs(curM, line, idx + 1)
+    if (curM && /^\s*-\s*対応\s*[:：]/.test(line)) { collectRefs(curM, line, idx + 1); inTaioCont = true; return }
+    if (inTaioCont && curM && /^\s+\S/.test(line)) { collectRefs(curM, line, idx + 1); return }
+    inTaioCont = false
   })
   if (inFence) fail(`${planPath}: fenced block が閉じていない`)
 
@@ -635,10 +663,15 @@ if (mode === 'design') {
   function normalizeSection(name: string): string {
     return name.split(/[（(]/)[0].trim()
   }
-  interface DesignEntry { text: string; line: number }
+  interface DesignEntry { text: string; line: number; groupMarked: boolean }
   const sections = new Map<string, DesignEntry[]>()
   const sectionLines = new Map<string, number>()
+  const MARK_RE = /\[(実行検証済|読解のみ)([:：]?)\s*([^\]]*)\]/
   let curSec: string | null = null
+  // ### サブ見出しに検証マークを付けて配下のエントリ群にまとめて適用するイディオム
+  // （例: ### DB leaf（[実行検証済: `npx vp test run src/db/` 472 PASS]））
+  let curGroupMarked = false
+  let lastEntry: DesignEntry | null = null
   let inFence = false
   designLines.forEach((line, idx) => {
     if (/^```/.test(line.trim())) { inFence = !inFence; return }
@@ -646,6 +679,8 @@ if (mode === 'design') {
     const sec = line.match(/^##\s+(.+?)\s*$/)
     if (sec) {
       curSec = normalizeSection(sec[1])
+      curGroupMarked = false
+      lastEntry = null
       if (sections.has(curSec)) {
         findings.push({
           check: 'D1:必須セクション',
@@ -657,8 +692,27 @@ if (mode === 'design') {
       }
       return
     }
-    // エントリはトップレベルの箇条書き（継続行・ネストはエントリ本体に含めない）
-    if (curSec && /^- /.test(line)) sections.get(curSec)!.push({ text: line, line: idx + 1 })
+    const sub = line.match(/^###+\s+(.+?)\s*$/)
+    if (sub) {
+      lastEntry = null
+      const gm = sub[1].match(MARK_RE)
+      curGroupMarked = gm !== null
+      if (gm && gm[1] === '実行検証済' && (gm[3].trim() === '' || !gm[3].includes('`'))) {
+        findings.push({
+          check: 'D2:検証マーク',
+          detail: `グループ見出し (L${idx + 1}) の [実行検証済] に再実行可能な証拠がない — ` +
+            `実行コマンドをバッククォートで併記する`,
+        })
+      }
+      return
+    }
+    // エントリはトップレベルの箇条書き。インデントされた継続行（ネスト含む）は本体に連結する
+    if (curSec && /^- /.test(line)) {
+      lastEntry = { text: line, line: idx + 1, groupMarked: curGroupMarked }
+      sections.get(curSec)!.push(lastEntry)
+      return
+    }
+    if (lastEntry && /^\s+\S/.test(line)) lastEntry.text += ' ' + line.trim()
   })
   if (inFence) fail(`${designPath}: fenced block が閉じていない`)
 
@@ -670,14 +724,16 @@ if (mode === 'design') {
     }
   }
 
-  // D2: 土台エントリの検証マーク
+  // D2: 土台エントリの検証マーク（グループ見出しのマークを継承しているエントリは免除）
   for (const e of sections.get('土台') ?? []) {
-    const mark = e.text.match(/\[(実行検証済|読解のみ)([:：]?)\s*([^\]]*)\]/)
+    const mark = e.text.match(MARK_RE)
     if (!mark) {
-      findings.push({
-        check: 'D2:検証マーク',
-        detail: `土台エントリ (L${e.line}) に [実行検証済] / [読解のみ] マークがない: ${e.text.slice(0, 60)}`,
-      })
+      if (!e.groupMarked) {
+        findings.push({
+          check: 'D2:検証マーク',
+          detail: `土台エントリ (L${e.line}) に [実行検証済] / [読解のみ] マークがない: ${e.text.slice(0, 60)}`,
+        })
+      }
       continue
     }
     if (mark[1] === '実行検証済') {
@@ -698,7 +754,7 @@ if (mode === 'design') {
   for (const secName of refSections) {
     for (const e of sections.get(secName) ?? []) {
       for (const tok of e.text.match(/B-[\w.()]+(?:〜B-[\w.()]+)?/g) ?? []) {
-        for (const id of expandRange(tok)) {
+        for (const id of resolveBIdRefs(tok, specIds)) {
           referenced.add(id)
           if (!specIds.has(id)) {
             findings.push({
@@ -1267,6 +1323,13 @@ if (mode === 'map') {
     const suffix = m[2] ?? null
     if (suffix === null) return { raw: token, file: m[1], lineRef: null, symbol: null, line }
     if (/^\d+$/.test(suffix)) return { raw: token, file: m[1], lineRef: Number(suffix), symbol: null, line }
+    const rng = suffix.match(/^(\d+)[-〜](\d+)$/)
+    if (rng) {
+      // 行範囲は終端行の生存だけ見れば十分（終端 ≤ EOF なら開始も範囲内）
+      const from = Number(rng[1]), to = Number(rng[2])
+      if (from >= to) { fail(`行範囲アンカーの順序が不正: ${token}`); return null }
+      return { raw: token, file: m[1], lineRef: to, symbol: null, line }
+    }
     if (/^[A-Za-z_$][\w$.]*$/.test(suffix)) return { raw: token, file: m[1], lineRef: null, symbol: suffix, line }
     return { raw: token, file: token, lineRef: null, symbol: null, line } // : を含むファイル名は稀 — 素通し
   }
