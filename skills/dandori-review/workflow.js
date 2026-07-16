@@ -98,8 +98,8 @@ const SCRIBE_SCHEMA = {
         required: ['index', 'disposition', 'id', 'matched'],
         properties: {
           index: { type: 'integer', description: '渡した指摘 JSON の index' },
-          disposition: { type: 'string', enum: ['new', 'rekindle', 'skip_refuted'] },
-          id: { type: ['string', 'null'], description: '追記した行の R-n ID（行を追加しなかった skip_refuted のみ null）' },
+          disposition: { type: 'string', enum: ['new', 'rekindle', 'skip_refuted', 'dup_minor'] },
+          id: { type: ['string', 'null'], description: '追記した行の R-n ID（行を追加しなかった skip_refuted / dup_minor のみ null）' },
           matched: { type: ['string', 'null'], description: '同一論点と照合した既存行の ID（new は null）' },
         },
       },
@@ -236,6 +236,9 @@ ${JSON.stringify(findings.map((f, index) => ({ index, severity: f.severity, titl
 1. 既存行と同一論点かを照合する
    - 同一論点の既存行の処置が「反証破棄」→ 行を追加しない（反証済みの再生産）。
      disposition=skip_refuted、matched にその ID、id は null
+   - **minor の指摘**で同一論点の既存行がある（処置を問わず）→ 行を追加しない
+     （minor は反証を通らないため、重複行はそのままユーザーへの重複提示になる）。
+     disposition=dup_minor、matched にその ID、id は null
    - 同一論点の既存行の処置がそれ以外 → 新規行を追記するが、処置セルは**空のまま**にする。
      disposition=rekindle、matched に既存 ID（再燃の確定は反証フェーズ後 — 反証で破棄されれば
      再燃ではなく偽陽性の再生産だったことになる）
@@ -250,6 +253,9 @@ const refutePrompt = (f) => `以下の仕様・設計ドキュメントレビュ
 指摘が誤りである可能性 — 事実誤認（ファイル:行の主張が原典と食い違う）、spec / design が
 実際には既にカバーしている、既存の確定裁定（precedents）で決着済み、到達不能な条件 — を
 対象ドキュメントとコードベースを自分で読んで確認すること。
+「到達不能」を反証根拠にする場合は、コード経路だけでなく**データ由来の到達可能性**
+（nullable なカラム・スキーマ変更前から残る古いレコード・部分書き込み・外部からの入力値）を
+確認してからにすること — 型注釈や現行コードパスのみを根拠に到達不能と断定しない。
 真とも偽とも確定できない場合は refuted=false（生存 — 安全側）とする。
 反証の成否と根拠（ファイル:行 / ドキュメントの該当節）を報告すること。
 
@@ -328,6 +334,18 @@ let round = startRound
 let rRowsExist = (setup.max_r_round || 0) > 0
 const minors = []
 
+// minor は反証を通らずユーザーに直接届く — 台帳照合（scribe の dup_minor 処分）で
+// 既存論点の再報告を落としてから蓄積する（同一論点が別ラウンドで重複提示される実測への対処）
+const addMinors = (findings, scribe) => {
+  const byIndex = new Map(scribe.entries.map(e => [e.index, e]))
+  findings.forEach((f, i) => {
+    if (f.severity !== 'minor') return
+    const e = byIndex.get(i)
+    if (e && e.disposition === 'dup_minor') return
+    minors.push(f)
+  })
+}
+
 while (true) {
   log(`ラウンド ${round}: 独立レビューア起動（前ラウンドの記憶なし・台帳は渡さない）`)
 
@@ -340,9 +358,8 @@ while (true) {
     return { status: 'escalated', reason: 'レビューアが結果を返さなかった — メインで再起動を判断', minors, lastRound: round, ledger: LEDGER }
   }
   const findings = review.findings
-  minors.push(...findings.filter(f => f.severity === 'minor'))
   const majors = findings.filter(f => f.severity !== 'minor')
-  log(`ラウンド ${round}: 指摘 ${findings.length} 件（blocker/major ${majors.length} / minor 累計 ${minors.length}）`)
+  log(`ラウンド ${round}: 指摘 ${findings.length} 件（blocker/major ${majors.length} / minor ${findings.length - majors.length}）`)
 
   // 収束: blocker と major が両方ゼロのラウンド
   if (majors.length === 0) {
@@ -353,6 +370,7 @@ while (true) {
       if (!minorScribe) {
         return { status: 'escalated', reason: '台帳記録係が結果を返さなかった（minor 記録） — 台帳の状態をメインで確認すること', minors, lastRound: round, ledger: LEDGER }
       }
+      addMinors(findings, minorScribe)
       rRowsExist = true
     }
     let judge = null
@@ -384,6 +402,7 @@ while (true) {
     return { status: 'escalated', reason: '台帳記録係が結果を返さなかった — 台帳の状態をメインで確認すること', findings, minors, lastRound: round, ledger: LEDGER }
   }
   rRowsExist = true
+  addMinors(findings, scribe)
   const idByIndex = new Map(scribe.entries.map(e => [e.index, e]))
 
   // 3. 指摘ごと独立反証（verifier）— blocker / major のみ。minor は反証を通らず
@@ -412,7 +431,21 @@ while (true) {
         : { ...f, refuted: false, basis: '反証エージェント無応答 — 安全側で生存扱い' }))))).filter(Boolean)
 
   if (verdicts.length > 0) {
-    await agent(verdictScribePrompt(verdicts), { label: '台帳:反証結果', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA })
+    // 反証結果の記入は収束判定の生命線 — 未記入のまま進むと反証破棄済みの行が生存として
+    // 数えられ、judgeNotes と台帳の言い分が食い違ったまま判定が汚染される（実戦観測）。
+    // ACK を検査し、失敗は 1 回だけ再試行、それでも書けなければ明示的に escalate する
+    let ack = await agent(verdictScribePrompt(verdicts), { label: '台帳:反証結果', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA })
+    if (!ack || !ack.done) {
+      log('反証結果の台帳記入が未完了 — 1 回だけ再試行')
+      ack = await agent(verdictScribePrompt(verdicts), { label: '台帳:反証結果(再試行)', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA })
+    }
+    if (!ack || !ack.done) {
+      return {
+        status: 'escalated',
+        reason: `反証結果を台帳に記入できなかった（${(ack && ack.note) || '記録係無応答'}）— 処置列が空欄のまま閉じると判定が汚染される。台帳をメインで修復してから新規実行で再開すること`,
+        minors, lastRound: round, ledger: LEDGER,
+      }
+    }
   }
 
   const survivors = verdicts.filter(v => !v.refuted)

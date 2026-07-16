@@ -58,6 +58,9 @@
  *   L3. 再燃参照 — 再燃→<ID> の参照先が台帳にない
  *   L4. ID 重複・欠番（台帳は追記のみ — 欠番は行の削除の疑い）
  *   L5. ラウンド記録矛盾 — 「指摘なし」マーカーのラウンドに blocker/major の生存行がある
+ *   L6. 保留の滞留 — 理由セルが空の保留（採否待ち）が 2 ラウンド以上放置されている
+ *       （放置された保留論点は後続ラウンドで major として再指摘され escalate を招く — 実戦観測。
+ *       ユーザー裁定済みの保留は理由セルに裁定を書くことで検査対象外になる）
  *   指摘ゼロのラウンドは台帳に行が残らず観測できない（過去の停滞パターンから escalated を
  *   返し続ける）ため、`<!-- round: C Rd=7 指摘なし -->` 形式のマーカー行で記録する
  *   （blocker/major の行を追記したラウンドでは不要）。
@@ -1051,6 +1054,19 @@ if (mode === 'ledger') {
     // 履歴上の過去の停滞窓は数えない — 回復したなら現在の停滞ではない）
     const n = counts.length
     const latestRd = rounds[n - 1]
+
+    // L6: 保留の滞留 — 理由セルが空の保留（採否待ち）が 2 ラウンド以上放置されている。
+    // 放置された保留論点は後続ラウンドで major として再指摘され escalate を招く（実戦観測）。
+    // ユーザー裁定済みの保留は理由セルに裁定を書く — 理由付き保留は採否確定済みとして対象外
+    for (const r of prows) {
+      if (r.action === '保留' && EMPTY_REASON.test(r.reason) && latestRd - r.rd >= 2) {
+        findings.push({
+          check: 'L6:保留の滞留',
+          detail: `${r.id} (L${r.line}): 保留が ${latestRd - r.rd} ラウンド滞留 — 採否を確定する` +
+            `（放置は同一論点の major 再燃昇格の温床。裁定済みで残すなら理由セルに裁定を書く）`,
+        })
+      }
+    }
     const stalled = n >= 3
       && counts[n - 1] >= counts[n - 2] && counts[n - 2] >= counts[n - 3] && counts[n - 1] > 0
       && rekindled.some(r => r.rd === latestRd)

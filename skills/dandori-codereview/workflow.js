@@ -256,7 +256,11 @@ ${JSON.stringify(majors.map((f, index) => ({ index, severity: f.severity, title:
 const refutePrompt = (f) => `以下のコードレビュー指摘を反証してください。指摘は recall 優先の発見係によるもので、
 偽陽性を多く含む前提です — この反証が唯一の精度ゲートです。指摘が誤りである可能性 —
 事実誤認、実際には到達不能なパス、既存仕様として正当な挙動 — を
-コードを読んで確認すること。真とも偽とも確定できない場合は refuted=false（生存 — 安全側）とする。
+コードを読んで確認すること。
+「到達不能」を反証根拠にする場合は、コード経路だけでなく**データ由来の到達可能性**
+（nullable なカラム・スキーマ変更前から残る古いレコード・部分書き込み・外部からの入力値）を
+確認してからにすること — 型注釈や現行コードパスのみを根拠に到達不能と断定しない。
+真とも偽とも確定できない場合は refuted=false（生存 — 安全側）とする。
 反証の成否と根拠（ファイル:行）を報告すること。
 ${f.lane === 'mutation' ? '\nこの指摘は生存ミュータント由来。反証の争点は等価ミュータント（意味を変えない変異で、殺しようがない）かどうか。\n' : ''}
 指摘 [${f.severity}]: ${f.title}
@@ -348,7 +352,12 @@ const minors = []
 // 指摘リストを 台帳追記 → 反証 に流す（レーン・ミューテーション共通の後段）
 async function processFindings(laneKey, findings, round, label) {
   const tagged = findings.map(f => ({ ...f, lane: laneKey }))
-  minors.push(...tagged.filter(f => f.severity === 'minor'))
+  // minor は台帳に載らないため run 内の重複だけ機械排除する（同一 title の再報告 —
+  // ラウンドを跨いで別レーンが同じ指摘を再発見するケース）。言い換えられた重複の照合は
+  // 提示前のメインの仕事（SKILL.md「重複排除して最後に一括で提示」）
+  for (const f of tagged.filter(f => f.severity === 'minor')) {
+    if (!minors.some(m => m.title === f.title)) minors.push(f)
+  }
   const majors = tagged.filter(f => f.severity !== 'minor')
   if (majors.length === 0) return []
 
@@ -442,8 +451,23 @@ while (true) {
   if (verdicts.length > 0) cRowsExist = true
 
   if (verdicts.length > 0) {
-    await serializedLedger(() =>
+    // 反証結果の記入は収束判定の生命線 — 未記入のまま進むと反証破棄済みの行が生存として
+    // 数えられ、判定が汚染される（review 側の実戦観測と同型）。ACK を検査し、失敗は
+    // 1 回だけ再試行、それでも書けなければ明示的に escalate する
+    let ack = await serializedLedger(() =>
       agent(verdictScribePrompt(verdicts), { label: '台帳:反証結果', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA }))
+    if (!ack || !ack.done) {
+      log('反証結果の台帳記入が未完了 — 1 回だけ再試行')
+      ack = await serializedLedger(() =>
+        agent(verdictScribePrompt(verdicts), { label: '台帳:反証結果(再試行)', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA }))
+    }
+    if (!ack || !ack.done) {
+      return {
+        status: 'escalated',
+        reason: `反証結果を台帳に記入できなかった（${(ack && ack.note) || '記録係無応答'}）— 処置列が空欄のまま閉じると判定が汚染される。台帳をメインで修復してから新規実行で再開すること`,
+        minors, lastRound: round, ledger: LEDGER,
+      }
+    }
   }
 
   const survivors = verdicts.filter(v => !v.refuted)
