@@ -172,6 +172,14 @@ function readLines(path: string, what: string): string[] {
   }
 }
 
+/**
+ * Markdown テーブル行の内側をセルに分割する。セル内の `\|`（エスケープ済みパイプ —
+ * 型のユニオン表記 `'a' \| 'b'` 等）は区切りとして扱わず、`|` に復元して返す
+ */
+function splitCells(inner: string): string[] {
+  return inner.split(/(?<!\\)\|/).map(c => c.trim().replace(/\\\|/g, '|'))
+}
+
 interface Finding { check: string; detail: string }
 const findings: Finding[] = []
 
@@ -224,9 +232,12 @@ interface Section { name: string; line: number }
 
 interface ParsedSpec { sections: Section[]; bs: SpecB[] }
 
-/** `B-1〜B-4` 形式の範囲見出しを個別 ID に展開する（純数値のみ）。非範囲はそのまま */
+/**
+ * `B-1〜B-4` 形式の範囲見出しを個別 ID に展開する（純数値のみ）。非範囲はそのまま。
+ * 右辺の B- 接頭辞は省略可（`B-20〜23` — 実データで頻出する省略形を受理する）
+ */
 function expandRange(idToken: string): string[] {
-  const m = idToken.match(/^B-(\d+)〜B-(\d+)$/)
+  const m = idToken.match(/^B-(\d+)〜(?:B-)?(\d+)$/)
   if (!m) return [idToken]
   const from = Number(m[1]), to = Number(m[2])
   if (from >= to) { fail(`範囲 ID の順序が不正: ${idToken}`); return [idToken] }
@@ -240,11 +251,25 @@ function expandRange(idToken: string): string[] {
  * 帰属させる（trace の帰属規則と同じ方針）。B-ID 候補でないもの
  * （B-ORDER 等のフィクスチャ文字列）は空配列
  */
+/**
+ * B-ID 参照の走査パターン。範囲の右辺は B- 接頭辞省略可（B-20〜23）だが、
+ * 数値開始に限定する（「B-1〜次節」のような散文の 〜 を範囲と誤認しない）
+ */
+const B_REF_RE = /B-[\w.()]+(?:〜(?:B-[\w.()]+|\d[\w.()]*))?/g
+
+/**
+ * 取り消し線スパン（~~...~~）を除去する。取り消し線内の B-ID は削除の記録であって
+ * 参照ではない — 生文字列マッチの前に必ず通す
+ */
+function stripStruck(text: string): string {
+  return text.replace(/~~.*?~~/g, '')
+}
+
 function resolveBIdRefs(raw: string, specIds: Set<string>): string[] {
   const norm = normalizeBIdToken(raw)
   if (norm === null) return []
   // 純数値範囲の直後の注記括弧は範囲判定の前に落とす（B-43〜B-45(client)）
-  const tok = norm.replace(/^(B-\d+〜B-\d+)\(.*$/, '$1')
+  const tok = norm.replace(/^(B-\d+〜(?:B-)?\d+)\(.*$/, '$1')
   return expandRange(tok).map(part => {
     if (specIds.has(part)) return part
     const base = part.split('(')[0]
@@ -268,7 +293,7 @@ function parseSpec(lines: string[], path: string): ParsedSpec {
       curB = null
       return
     }
-    const heading = line.match(/^#{3,6}\s+(~~\s*)?(B-[\w.()]+(?:〜B-[\w.()]+)?)\s*[:：]\s*(.*)$/)
+    const heading = line.match(/^#{3,6}\s+(~~\s*)?(B-[\w.()]+(?:〜(?:B-[\w.()]+|\d[\w.()]*))?)\s*[:：]\s*(.*)$/)
     if (heading) {
       const title = heading[3].trim()
       curB = {
@@ -551,7 +576,7 @@ if (mode === 'plan') {
     return milestones.get(id)!
   }
   function collectRefs(m: Milestone, text: string, line: number): void {
-    for (const tok of text.match(/B-[\w.()]+(?:〜B-[\w.()]+)?/g) ?? []) {
+    for (const tok of stripStruck(text).match(B_REF_RE) ?? []) {
       for (const id of resolveBIdRefs(tok, specIds)) {
         if (!m.refs.has(id)) m.refs.set(id, line)
       }
@@ -570,7 +595,7 @@ if (mode === 'plan') {
     const cells = line.trim().match(/^\|(.+)\|$/)
     if (cells) {
       inTaioCont = false
-      const parts = cells[1].split('|').map(c => c.trim())
+      const parts = splitCells(cells[1])
       if (/^M[\w.]+$/.test(parts[0])) {
         collectRefs(milestone(parts[0], idx + 1), parts.slice(1).join(' '), idx + 1)
       }
@@ -706,8 +731,9 @@ if (mode === 'design') {
       }
       return
     }
-    // エントリはトップレベルの箇条書き。インデントされた継続行（ネスト含む）は本体に連結する
-    if (curSec && /^- /.test(line)) {
+    // エントリはトップレベルの箇条書き（`- ` / `1. ` 番号付きも可）。
+    // インデントされた継続行（ネスト含む）は本体に連結する
+    if (curSec && /^(?:- |\d+\. )/.test(line)) {
       lastEntry = { text: line, line: idx + 1, groupMarked: curGroupMarked }
       sections.get(curSec)!.push(lastEntry)
       return
@@ -753,7 +779,7 @@ if (mode === 'design') {
   const referenced = new Set<string>()
   for (const secName of refSections) {
     for (const e of sections.get(secName) ?? []) {
-      for (const tok of e.text.match(/B-[\w.()]+(?:〜B-[\w.()]+)?/g) ?? []) {
+      for (const tok of stripStruck(e.text).match(B_REF_RE) ?? []) {
         for (const id of resolveBIdRefs(tok, specIds)) {
           referenced.add(id)
           if (!specIds.has(id)) {
@@ -902,7 +928,7 @@ if (mode === 'ledger') {
     }
     const m = line.trim().match(/^\|(.+)\|$/)
     if (!m) return
-    const cells = m[1].split('|').map(c => c.trim())
+    const cells = splitCells(m[1])
     if (cells.every(c => /^:?-+:?$/.test(c))) return // セパレータ行
     if (cells[0] === 'ID') return // ヘッダ行
     const idm = cells[0].match(/^([RCF])-(\d+)$/)
@@ -911,7 +937,7 @@ if (mode === 'ledger') {
       return
     }
     if (cells.length !== 6) {
-      findings.push({ check: 'L1:行形式', detail: `L${idx + 1}: ${cells[0]} の列数が ${cells.length}（正準は 6: ID/Rd/深刻度/論点/処置/根拠・理由）` })
+      findings.push({ check: 'L1:行形式', detail: `L${idx + 1}: ${cells[0]} の列数が ${cells.length}（正準は 6: ID/Rd/深刻度/論点/処置/根拠・理由）— セル内に \`|\` を書くときは \`\\|\` でエスケープする` })
       return
     }
     const rd = Number(cells[1])
