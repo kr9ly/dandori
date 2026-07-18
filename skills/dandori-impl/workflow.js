@@ -24,6 +24,9 @@ export const meta = {
 //   specDir      (必須) .dandori/specs/<feature> — spec.md / design.md / plan.md /
 //                state.yaml をこの直下に置く規約
 //   maxFixRounds (任意) ゲート赤時の修正ディスパッチ回数の上限（既定 2）
+//   workRoot     (任意) コードの作業ルート（worktree 並列レーン等、コードがセッションの
+//                作業ディレクトリと別の場所にあるとき指定）。実装・修正・検証エージェントの
+//                プロンプトに決定的に注入され、コード編集とゲート実行をこの中に閉じ込める
 //
 // 戻り値 status:
 //   done               — 残りマイルストーンすべてのゲートが緑
@@ -37,7 +40,7 @@ export const meta = {
 const A = typeof args === 'string' ? JSON.parse(args) : args
 
 if (!A || !A.specDir) {
-  throw new Error('args に specDir が必要。任意: maxFixRounds')
+  throw new Error('args に specDir が必要。任意: maxFixRounds, workRoot')
 }
 
 const SPEC_DIR = A.specDir.replace(/\/+$/, '')
@@ -46,6 +49,19 @@ const DESIGN = `${SPEC_DIR}/design.md`
 const PLAN = `${SPEC_DIR}/plan.md`
 const STATE = `${SPEC_DIR}/state.yaml`
 const MAX_FIX_ROUNDS = A.maxFixRounds || 2
+
+// 作業ルート（任意）— サブエージェントはセッションの主作業ディレクトリで動くため、コードが
+// 別の場所（レーン worktree 等）にあるときはプロンプト注入で作業場所を固定する。
+// plan.md 側の手パッチ（ゲートへの cd プレフィックス等）に依存しない
+const WORK_ROOT = A.workRoot ? A.workRoot.replace(/\/+$/, '') : null
+const workRootNote = WORK_ROOT
+  ? `
+
+作業ルート: ${WORK_ROOT}
+- コードの読み書き・ゲート実行はすべてこのディレクトリ内で行うこと
+- 相対パス（src/ 等）はこのルート基準。ゲートは \`cd ${WORK_ROOT} && <コマンド>\` で実行する
+- このディレクトリ外のコード（他の worktree・リポジトリ）を変更しないこと`
+  : ''
 
 // ---- schemas ---------------------------------------------------------------
 
@@ -170,7 +186,7 @@ const implPrompt = (m, brief, gates) => `以下のブリーフに従って実装
 
 # マイルストーン ${m.id}: ${m.title}
 
-${brief}
+${brief}${workRootNote}
 
 ルール:
 - 不変条件に抵触する変更が必要になったら、実装せず停止して報告すること
@@ -186,7 +202,7 @@ ${gates.map(g => `  - ${g}`).join('\n')}
   1 テストが複数 B 行を検証するなら全 ID を列挙する`
 
 const fixPrompt = (m, brief, gates, gateOutput) => `マイルストーン ${m.id}（${m.title}）の実装後、以下のゲートが赤になっています。
-原因を調べて修正してください。
+原因を調べて修正してください。${workRootNote}
 
 ゲート出力の要点:
 ${gateOutput}
@@ -204,7 +220,7 @@ ${gates.map(g => `  - ${g}`).join('\n')}`
 
 const verifyPrompt = (gates) => `次のゲートコマンドを順に実行し、すべて緑か確認してください。コードの修正はしないこと。
 実装エージェントの自己申告の検証が目的です。赤があれば gate_output に生の出力の要点を入れること:
-${gates.map(g => `- ${g}`).join('\n')}`
+${gates.map(g => `- ${g}`).join('\n')}${workRootNote}`
 
 const discoveryPrompt = (m, discoveries) => `あなたは発見ログの還流係です。マイルストーン ${m.id} の実装エージェントが報告した
 以下の [発見]（仕様・設計と現実のコードの食い違い）を処理してください。

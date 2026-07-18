@@ -27,6 +27,9 @@ export const meta = {
 //                なければ機械検査ステップをスキップ — この工程で導入作業はしない）
 //   resources    (任意) .dandori/resources.md のパス（提案の接地先として規約を参照させる）
 //   mapDir       (任意) .dandori/map/ のパス（同上）
+//   workRoot     (任意) コードの作業ルート（worktree 並列レーン等、コードがセッションの
+//                作業ディレクトリと別の場所にあるとき指定）。機械検査・レビュー・採否・適用の
+//                プロンプトに決定的に注入され、コードの読み書きとゲート実行をこの中に閉じ込める
 //
 // 戻り値 status:
 //   done     — 適用分が working tree に反映され全ゲート緑（適用ゼロ件も done）
@@ -38,7 +41,7 @@ export const meta = {
 const A = typeof args === 'string' ? JSON.parse(args) : args
 
 if (!A || !A.diffCommand || !Array.isArray(A.gates) || A.gates.length === 0) {
-  throw new Error('args に diffCommand / gates（配列）が必要。任意: mechCommands / resources / mapDir')
+  throw new Error('args に diffCommand / gates（配列）が必要。任意: mechCommands / resources / mapDir / workRoot')
 }
 
 const DIFF_CMD = A.diffCommand
@@ -46,6 +49,18 @@ const GATES = A.gates
 const MECH = Array.isArray(A.mechCommands) ? A.mechCommands : []
 const RESOURCES = A.resources || null
 const MAP_DIR = A.mapDir || null
+
+// 作業ルート（任意）— サブエージェントはセッションの主作業ディレクトリで動くため、コードが
+// 別の場所（レーン worktree 等）にあるときはプロンプト注入で作業場所を固定する
+const WORK_ROOT = A.workRoot ? A.workRoot.replace(/\/+$/, '') : null
+const workRootNote = WORK_ROOT
+  ? `
+
+作業ルート: ${WORK_ROOT}
+- 対象コードベースはこのディレクトリ。コードの読み書き・コマンド実行はすべてこの中で行うこと
+- 相対パス（src/ 等）はこのルート基準。コマンドは \`cd ${WORK_ROOT} && <コマンド>\` で実行する
+- このディレクトリ外のコード（他の worktree・リポジトリ）を変更しないこと`
+  : ''
 
 // ---- schemas ---------------------------------------------------------------
 
@@ -139,7 +154,7 @@ const COMMON_RULES = `ルール:
 - 修正は行わない。提案の列挙だけを返すこと`
 
 const LANE_HEADER = `あなたは実装コードのリファインメントレビューアです。コードベースへの読み取りアクセスがあります。
-レビュー対象の差分は次のコマンドで取得すること: ${DIFF_CMD}`
+レビュー対象の差分は次のコマンドで取得すること: ${DIFF_CMD}${workRootNote}`
 
 const LANES = {
   idiom: {
@@ -177,7 +192,7 @@ ${MECH.map(c => `- ${c}`).join('\n')}
 - formatter の自動修正はそのまま適用してよい（working tree に書く）
 - linter の指摘のうち自動修正（--fix 等）で潰せるものは潰す。手動判断が要る指摘は
   修正せず summary に列挙する（後段のレビューレーンが扱う）
-- コマンドの導入・設定変更はしない — スコープ外の変更を diff に混ぜない`
+- コマンドの導入・設定変更はしない — スコープ外の変更を diff に混ぜない${workRootNote}`
 
 const filterPrompt = (proposals) => `あなたはリファインメント提案の採否フィルタです。コードベースへの読み取りアクセスがあります。
 接地として許される参照先: ${GROUNDING_SOURCES}。
@@ -193,7 +208,7 @@ ${JSON.stringify(proposals.map((p, index) => ({ index, title: p.title, target: p
    behavior_change=true を付ける（リファインメントではなく変更のため、正規のフローに乗せる）
 3. 採否に迷ったら棄却する（保守側に倒す）。「議論して磨く」対象にはしない
 
-修正は行わない。判定の列挙だけを返すこと。`
+修正は行わない。判定の列挙だけを返すこと。${workRootNote}`
 
 const applyPrompt = (accepted) => `あなたはリファインメント提案の適用エージェントです。
 採否フィルタを通過した以下の提案を working tree に適用してください。
@@ -207,7 +222,7 @@ ${JSON.stringify(accepted.map(p => ({ lane: p.lane, title: p.title, target: p.ta
 - 全提案の適用後に以下のゲートを実行し、赤になったら**原因の適用だけを revert して**再実行、
   全ゲート緑の状態で終えること。revert した提案は reverted に理由つきで含めること:
 ${GATES.map(g => `  - ${g}`).join('\n')}
-- 最終状態のゲート結果（生の出力の要点）を gate_output で報告すること`
+- 最終状態のゲート結果（生の出力の要点）を gate_output で報告すること${workRootNote}`
 
 // ---- フロー（1ラウンド固定 — ループしない）------------------------------------
 
@@ -228,7 +243,7 @@ const entryGateThunk = async () => {
   const g = await agent(
     `次のゲートコマンドを順に実行し、すべて緑か確認してください。コードの修正はしないこと。
 赤があれば gate_output に生の出力の要点を入れること:
-${GATES.map(c => `- ${c}`).join('\n')}`,
+${GATES.map(c => `- ${c}`).join('\n')}${workRootNote}`,
     {
       label: '入口ゲート確認', phase: 'レビュー', model: 'sonnet', effort: 'low',
       schema: { type: 'object', required: ['green', 'gate_output'], properties: { green: { type: 'boolean' }, gate_output: { type: 'string' } } },

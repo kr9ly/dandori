@@ -82,8 +82,12 @@ spec.md / design.md は**どのレーンにも渡さない** — この工程の
 （適用者が自分の仕事量を減らす方向にフィルタを甘くする利益相反を避ける）。
 
 - args: `diffCommand` / `gates`（正準コマンド配列）、任意で `mechCommands`（formatter/linter）/
-  `resources` / `mapDir`。JSON オブジェクトで渡す（文字列で届く環境でもスクリプト側で
+  `resources` / `mapDir` / `workRoot`。JSON オブジェクトで渡す（文字列で届く環境でもスクリプト側で
   JSON.parse に正規化される）
+- `workRoot`: コードの作業ルート。worktree 並列レーン等、コードがセッションの主作業ディレクトリと
+  別の場所にあるとき指定する（サブエージェントは主作業ディレクトリで動くため、指定しないと
+  相対パスのゲートが失敗し、他 worktree を誤読・誤編集するリスクがある）。機械検査・レビュー・
+  採否・適用のプロンプトに「コードの読み書きとゲート実行を workRoot 内に閉じる」指示が注入される
 - 戻り値は `done`（適用・棄却一覧つき）/ `gate_red` / `blocked`（入口ゲート赤）。振る舞い変更として棄却された提案は
   `behaviorChanges` で返る — design.md の発見ログへの記録と、採否一覧のユーザー提示、
   state.yaml の更新はメインエージェントが行う
