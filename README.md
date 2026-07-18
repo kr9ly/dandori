@@ -270,6 +270,8 @@ cp -r dandori/skills/* <project>/.claude/skills/
 
 ## 付録
 
+- [docs/digest.md](docs/digest.md) — ダイジェスト。各工程が有効な理由の最小言語化
+  （工程ごとに一行。貫通原理「検証状態の会計」の各論として読む）
 - [docs/appendix-formal.md](docs/appendix-formal.md) — `formal` ゲートタグ
   （プロパティベーステスト・形式検証）の発動条件と運用。仕様の主張が
   全称形（どんな入力でも / どの実行順でも）になったときに開く
