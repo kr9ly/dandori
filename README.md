@@ -292,6 +292,12 @@ cp -r dandori/skills/* <project>/.claude/skills/
   なぜエージェント時代にこのプロセスが経済的に成立するのか、
   テスト容易性の5性質（DRIVE）と仕様表現度のレバレッジ経済
 
+## アイディア（未実施）
+
+- [docs/ideas/spec-lens-review.md](docs/ideas/spec-lens-review.md) — spec レンズレビュー。
+  要件から blind 生成した spec をレビュー観点として既存コードの穴を探す軽量フロー
+  （gate を捨てて finder レーンだけ残す構成）
+
 ## License
 
 MIT
