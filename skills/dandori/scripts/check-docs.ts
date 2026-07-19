@@ -79,12 +79,12 @@
  *   Y3. フェーズ整合 — phase が phases_done と矛盾しない / 短縮コースに存在しない
  *       工程が記録されていない / 完了済み工程の status・カウンタが完了状態か
  *       （例: phases_done に impl があるのに milestones_done < total）/
- *       feedback / annotate は gate 通過後のみ / cleanup は annotate 完了後のみ /
- *       done は cleanup 完了後のみ
+ *       annotate は gate 通過後のみ / strip は annotate 完了後のみ /
+ *       feedback / cleanup は strip 完了後のみ / done は cleanup 完了後のみ
  *   Y4. 成果物整合 — フェーズが前提とするドキュメント（spec.md / design.md / plan.md /
  *       review-ledger.md）の存在。phase: done では逆に使い捨てドキュメントの処分漏れを
  *       検出する（アーカイブ方針で意図的に残す場合は無視してよい）。
- *       phase: feedback は gate 後（成果物現役）と done 後の再開（処分済み）の
+ *       phase: feedback は strip 後（成果物現役）と done 後の再開（処分済み）の
  *       両文脈があるため spec.md の存在だけを要求する
  *
  * map モード — survey 成果物（.dandori/map/*.md）の証拠アンカー死活検査:
@@ -116,8 +116,8 @@
  *   幽霊と誤検出しない）。括弧はバランスを保って正規化し（B-15(b) を壊さない）、
  *   spec にない括弧サフィックス付き ID はパラメタライズ表記として基底 B-ID に帰属させる
  *
- * residue モード — dandori-cleanup のプロセス言及残存検査:
- *   gate 通過後のクリーンアップで、フィーチャーのファイルからプロセス由来の言及が
+ * residue モード — dandori-strip のプロセス言及残存検査:
+ *   gate 通過後のストリップで、フィーチャーのファイルからプロセス由来の言及が
  *   除去しきれたかを機械確認する。`dandori-ok:` を含む行は裁定済みの機能的依存として
  *   除外する（その行自身と**直後の 1 行** — コメント行にマーカーを置き、次行のパス参照等を
  *   守る形を許す。2 行以上に及ぶ参照は各行にマーカーが必要）。
@@ -1143,8 +1143,8 @@ if (mode === 'state') {
     }
   })
 
-  const FULL_ORDER = ['spec', 'sketch', 'ground', 'review', 'spike', 'plan', 'impl', 'codereview', 'refine', 'gate', 'annotate', 'cleanup']
-  const SHORT_PHASES = new Set(['spec', 'sketch', 'impl', 'codereview', 'refine', 'gate', 'annotate', 'cleanup', 'feedback']) // sketch/codereview/refine は短縮でも任意実施可。annotate/feedback は両コース共通
+  const FULL_ORDER = ['spec', 'sketch', 'ground', 'review', 'spike', 'plan', 'impl', 'codereview', 'refine', 'gate', 'annotate', 'strip', 'cleanup']
+  const SHORT_PHASES = new Set(['spec', 'sketch', 'impl', 'codereview', 'refine', 'gate', 'annotate', 'strip', 'cleanup', 'feedback']) // sketch/codereview/refine は短縮でも任意実施可。annotate/strip/feedback は両コース共通
   // feedback は線形順序の外（done からの継続改善入口）— phases_done には入らない
   const PHASE_VOCAB = new Set([...FULL_ORDER, 'done', 'feedback'])
 
@@ -1153,7 +1153,7 @@ if (mode === 'state') {
     typeof top[k] === 'object' ? top[k] as Record<string, string> : {}
 
   // Y1: 語彙・形式
-  const KNOWN_TOP = new Set(['feature', 'course', 'phase', 'phases_done', 'revision', 'sketch', 'review', 'spike', 'impl', 'codereview', 'refine', 'annotate', 'cleanup', 'feedback', 'progress', 'updated'])
+  const KNOWN_TOP = new Set(['feature', 'course', 'phase', 'phases_done', 'revision', 'sketch', 'review', 'spike', 'impl', 'codereview', 'refine', 'annotate', 'strip', 'cleanup', 'feedback', 'progress', 'updated'])
   for (const k of Object.keys(top)) {
     if (!KNOWN_TOP.has(k)) findings.push({ check: 'Y1:語彙・形式', detail: `未知のトップレベルキー: ${k}（正準定義は dandori ルーターの SKILL.md）` })
   }
@@ -1181,7 +1181,8 @@ if (mode === 'state') {
     codereview: new Set(['in_progress', 'passed', 'escalated', 'skipped']),
     refine: new Set(['pending', 'done', 'skipped']),
     annotate: new Set(['pending', 'done', 'skipped']),
-    cleanup: new Set(['pending', 'done', 'skipped']),
+    strip: new Set(['pending', 'done', 'skipped']),
+    cleanup: new Set(['pending', 'done']), // クローズは省略不可 — B-ID 残置の裁定は strip.skipped 側
   }
   for (const [sec, vocab] of Object.entries(STATUS_VOCAB)) {
     const s = section(sec).status
@@ -1251,14 +1252,20 @@ if (mode === 'state') {
   if (phase === 'feedback' && !phasesDone.includes('gate')) {
     findings.push({ check: 'Y3:フェーズ整合', detail: 'phase: feedback なのに phases_done に gate がない — feedback は gate 通過後の安定点。gate を通らずに feedback にはならない' })
   }
+  if (phase === 'feedback' && !phasesDone.includes('strip')) {
+    findings.push({ check: 'Y3:フェーズ整合', detail: 'phase: feedback なのに phases_done に strip がない — feedback は annotate → strip を経た安定点（strip を skip した場合も phases_done には入る）' })
+  }
   if (phase === 'done' && !phasesDone.includes('cleanup')) {
     findings.push({ check: 'Y3:フェーズ整合', detail: 'phase: done なのに phases_done に cleanup がない — done は cleanup（店じまい）完了後のみ。改訂待ちなら phase: feedback が正' })
   }
   if (phase === 'annotate' && !phasesDone.includes('gate')) {
-    findings.push({ check: 'Y3:フェーズ整合', detail: 'phase: annotate なのに phases_done に gate がない — annotate（コメント保全）は feedback の完全 fix 裁定後、つまり gate 通過後' })
+    findings.push({ check: 'Y3:フェーズ整合', detail: 'phase: annotate なのに phases_done に gate がない — annotate（コメント保全）は gate 通過直後の工程' })
   }
-  if (phase === 'cleanup' && !phasesDone.includes('annotate')) {
-    findings.push({ check: 'Y3:フェーズ整合', detail: 'phase: cleanup なのに phases_done に annotate がない — cleanup（除去）の前に annotate（消える Why のコメント保全）を通す' })
+  if (phase === 'strip' && !phasesDone.includes('annotate')) {
+    findings.push({ check: 'Y3:フェーズ整合', detail: 'phase: strip なのに phases_done に annotate がない — strip（除去）の前に annotate（消える Why のコメント保全）を通す' })
+  }
+  if (phase === 'cleanup' && !phasesDone.includes('strip')) {
+    findings.push({ check: 'Y3:フェーズ整合', detail: 'phase: cleanup なのに phases_done に strip がない — cleanup（店じまい）は annotate → strip → feedback の完全 fix 裁定後' })
   }
   // phase: feedback の間は phases_done が前サイクル（コース再判定前）の記録 — 短縮コース検査は免除
   if (course === 'short' && phase !== 'feedback') {
@@ -1281,7 +1288,8 @@ if (mode === 'state') {
     ['codereview', ['passed', 'escalated', 'skipped']],
     ['refine', ['done', 'skipped']],
     ['annotate', ['done', 'skipped']],
-    ['cleanup', ['done', 'skipped']],
+    ['strip', ['done', 'skipped']],
+    ['cleanup', ['done']],
   ]
   for (const [sec, ok] of doneNeedsStatus) {
     const s = section(sec).status
@@ -1321,9 +1329,9 @@ if (mode === 'state') {
     if (phasesDone.includes('sketch') && section('sketch').status !== 'skipped' && !exists('sketch.md')) {
       findings.push({ check: 'Y4:成果物整合', detail: 'phases_done に sketch があるのに sketch.md がない（sketch 完了の成果物 — skipped なら sketch.status に記録する）' })
     }
-    // cleanup は trace.md を B 行↔テスト対応の作業リストとして使う（処分は cleanup の最後）
-    if (phase === 'cleanup' && !exists('trace.md')) {
-      findings.push({ check: 'Y4:成果物整合', detail: 'phase: cleanup なのに trace.md がない — cleanup の作業リスト（gate はクローズで trace.md を処分しない）' })
+    // strip は trace.md を B 行↔テスト対応の作業リストとして使い、cleanup が処分する（処分は cleanup の最後）
+    if ((phase === 'strip' || phase === 'cleanup') && !exists('trace.md')) {
+      findings.push({ check: 'Y4:成果物整合', detail: `phase: ${phase} なのに trace.md がない — strip の作業リスト・cleanup の処分対象（gate は trace.md を処分しない）` })
     }
   } else {
     // 既定運用（docs/appendix-records.md）では spec.md 含む全ドキュメントを
@@ -1617,8 +1625,8 @@ if (mode === 'trace') {
     const gate = parsed.tokens.join(', ') || '（Gate なし）'
     const found = expandRange(b.id).flatMap(id => hits.get(id) ?? [])
     // 差分トレース: 前サイクルで検証済みの行（Rev が現 revision 未満 / 無印 = 初回）は
-    // 個別トレースを要求しない。cleanup で B-ID が剥がされた後でも偽 T1 を出さないため。
-    // ただしテストに B-ID が残っている行（cleanup skip プロジェクト等）は通常フローで再実行対象
+    // 個別トレースを要求しない。strip で B-ID が剥がされた後でも偽 T1 を出さないため。
+    // ただしテストに B-ID が残っている行（strip skip プロジェクト等）は通常フローで再実行対象
     const isOldRow = traceRevision !== null && (b.rev === null || b.rev < traceRevision)
     if (isOldRow && found.length === 0) {
       const prevRev = b.rev ?? 1

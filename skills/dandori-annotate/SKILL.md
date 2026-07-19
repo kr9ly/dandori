@@ -1,6 +1,6 @@
 ---
 name: dandori-annotate
-description: dandori プロセスのコメント保全工程。spec.md を含むフィーチャードキュメント一式の処分（cleanup）で消える設計判断 — Why、特に Why not（採らなかった選択肢・意図的にやらないこと）— の行き先を全数確定する。コード近傍の判断はコードコメントへ、裁定はコミット記録の下書きへ、未解決リスク・分離タスクはタスク置き場へ。dandori-feedback の「実装は完全に fix」裁定から遷移するか「コメント保全しよう」「Why 残ってるか確認して」で使う。
+description: dandori プロセスのコメント保全工程。spec.md を含むフィーチャードキュメント一式の処分（cleanup）で消える設計判断 — Why、特に Why not（採らなかった選択肢・意図的にやらないこと）— の行き先を全数確定する。コード近傍の判断はコードコメントへ、裁定はコミット記録の下書きへ、未解決リスク・分離タスクはタスク置き場へ。dandori-gate の通過から遷移するか「コメント保全しよう」「Why 残ってるか確認して」で使う。
 ---
 
 # dandori-annotate — 消える Why の行き先確定
@@ -13,13 +13,18 @@ spec.md を含むフィーチャードキュメント一式は cleanup で処分
 判断はコードコメントへ、フィーチャー単位の裁定は墓碑コミットの記録へ、push 型の情報
 （未解決リスク・分離タスク）はタスク置き場へ。
 
-cleanup（プロセス言及の**除去**）と対になる**付与**の工程であり、必ず cleanup より先に
-行う — この工程で付与したコメントに dandori 語彙がうっかり混入しても、後続の cleanup の
+strip（プロセス言及の**除去**）と対になる**付与**の工程であり、必ず strip より先に
+行う — この工程で付与したコメントに dandori 語彙がうっかり混入しても、後続の strip の
 residue 検査が機械検出できる（逆順だと検査済みのコードに未検査のコメントが増える）。
+
+gate 直後・feedback（外部レビューの安定点）の前に行う — 付与された Why / Why not
+コメントは、外部レビュアーが「なぜこうなっている？」と指摘する前に読める情報でもある。
+改訂サイクルで再訪したときは「## Why 保全」節の既存処置が生きている — 今回のサイクルで
+増えた判断だけを追走査すればよい。
 
 ## 入口条件
 
-- state.yaml: `phase: annotate`（gate 通過・コミット済み + feedback で完全 fix の裁定済み）
+- state.yaml: `phase: annotate`（gate 通過・コミット済み）
 - 処分予定ドキュメント（design.md / review-ledger.md / sketch.md）が1つ以上存在する
   — 1つも無ければ「スキップ」へ
 
@@ -53,9 +58,9 @@ residue 検査が機械検出できる（逆順だと検査済みのコードに
 候補ごとに該当コード位置を特定し、処置を決める:
 
 - **既にコメントがある**（impl 工程が書いた等）→ 内容が Why / Why not に答えているか
-  確認する。dandori 語彙（B-n / design.md 参照）混じりでも可 — cleanup が自然文化する
+  確認する。dandori 語彙（B-n / design.md 参照）混じりでも可 — strip が自然文化する
 - **ない** → 付与する。書き方:
-  - dandori 語彙を使わない自然文で書く（cleanup の作業を増やさない）
+  - dandori 語彙を使わない自然文で書く（strip の作業を増やさない）
   - 周辺コードのコメント密度・言語・イディオムに合わせる
   - 「何をしているか」でなく「なぜか / なぜ X でないか」を書く。棄てた代替案は
     「X だと〜が壊れる」まで書いて初めて再演を防げる
@@ -84,13 +89,13 @@ design.md が無い短縮コースでは trace.md 末尾に置く（trace.md は
   ロジック・テスト・アサーションには触れない（それは annotate ではなく別フィーチャーの仕事）
 - ゲート（unit — `.dandori/resources.md` の正準コマンド）緑を確認する
   （コメントのみの変更でも doctest・コメント lint・snapshot に波及しうる）
-- **annotate 専用コミット**にする（gate / cleanup のコミットと分離 — 付与の diff が
+- **annotate 専用コミット**にする（gate / strip のコミットと分離 — 付与の diff が
   それ自体「この実装の Why 一覧」として履歴に残る）。付与ゼロならコミット不要
 
 ### 4. 遷移
 
-state.yaml を更新して dandori-cleanup へ:
-`phase: cleanup`、`annotate.status: done`、`annotate.annotated: <付与数>`、
+state.yaml を更新して dandori-strip へ:
+`phase: strip`、`annotate.status: done`、`annotate.annotated: <付与数>`、
 `phases_done` に annotate 追加。
 
 ## スキップ
@@ -98,7 +103,7 @@ state.yaml を更新して dandori-cleanup へ:
 既定運用（tombstone）では spec.md が常に候補源のためスキップしない。
 `方式: retain` のプロジェクトで、処分対象ドキュメント（design.md / review-ledger.md /
 sketch.md）が**1つも存在しない**場合のみ `annotate.status: skipped`（理由つき）として
-cleanup へ進む。候補を走査した結果ゼロだった場合は skip ではなく `done`（annotated: 0）—
+strip へ進む。候補を走査した結果ゼロだった場合は skip ではなく `done`（annotated: 0）—
 「消える判断は無い」と確認した事実に価値がある。
 
 ## 完了条件
@@ -109,4 +114,4 @@ cleanup へ進む。候補を走査した結果ゼロだった場合は skip で
 - push 型項目（未解決リスク・分離タスク）が全件タスク置き場へ転送済みで、
   コミット記録の下書きが「## Why 保全」節に揃っている
 - ゲート緑 + annotate コミット済み（付与ゼロならコミット不要）
-- state.yaml: `phase: cleanup`、`phases_done` に annotate 追加
+- state.yaml: `phase: strip`、`phases_done` に annotate 追加

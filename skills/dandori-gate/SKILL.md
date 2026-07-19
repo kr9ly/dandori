@@ -36,17 +36,18 @@ spec.md の全 B 行について、以下の表を **`.dandori/specs/<feature>/t
   trace.md に反映し §3 の裁定対象に含める。`check-docs.ts trace` も同一行の
   `.skip` / `.todo` / `xit` を T4 として検出するが、外側の `describe.skip` は行 grep では
   見えない — サマリの skipped=0 確認が正
-- **改訂サイクル**（state.yaml に `revision: n`）のうち、cleanup 前のループ（`feedback.trace_scope`
-  なし）は通常どおり全行トレースする — B-ID がテスト名に現役で残っているため機械突合がそのまま効く。
-  **cleanup 済み（done）からの再開**（`feedback.trace_scope` あり — B-ID 剥がし済み）では
-  trace_scope に従う:
+- **改訂サイクル**（state.yaml に `revision: n`）では `feedback.trace_scope` に従う —
+  前サイクルの strip で旧 B 行の B-ID はテスト名から除去済みのため、機械突合が効くのは
+  今回の revision の B 行だけ（strip を skip した B-ID 現役プロジェクトのみ
+  `trace_scope` なし — 通常どおり全行トレースする）:
   - `delta`（既定）: 初期トレース表の生成に `--revision <n>` を付ける — 今回の revision の
     B 行（`Rev: <n>`）だけをフルトレースし、旧 B 行は「✅ 回帰」行（スイート緑 +
     skipped/todo 0 で担保 — 対応の正は前サイクルの gate コミットの git 履歴）として出力される。
     旧 manual / visual 行は「回帰確認の要否を裁定」行になる — 改訂の影響が及ぶ行だけ
     再確認する（裁定の記録は必須）
   - `full`: 通常どおり全行トレース。旧 B 行↔テストの対応は前サイクルの gate コミット時点の
-    trace.md と cleanup コミットの rename 差分から再構築する（根拠明記の手動対応付け）
+    trace.md と strip コミットの rename 差分から再構築する（根拠明記の手動対応付け —
+    cleanup 前のループでは処分前の trace.md を上書き前に参照すれば現物で引ける）
 - B 行↔テストの対応付けは、初期トレース表の生成で機械化されている:
   `node <dandori-repo>/skills/dandori/scripts/check-docs.ts trace <spec.md> <テストディレクトリ...>`
   が B-ID をテストコードから grep（impl の規約でテスト名に B-ID が入っている）して
@@ -108,18 +109,19 @@ spec.md の全 B 行について、以下の表を **`.dandori/specs/<feature>/t
 - **検証手段の不在**（⚠️ 未検証） → テストを追加するか、ユーザー承認の上で
   ゲートタグを manual に降格するか。**黙認は不可**
 
-### 4. feedback への遷移
+### 4. annotate への遷移
 
-コミット完了後、state.yaml を `phase: feedback` にして **dandori-feedback へ遷移する**。
-gate 直後に cleanup はしない — cleanup（B-ID 除去・使い捨てドキュメントの処分）は
-不可逆な「店じまい」であり、**改訂がもう来ないと確定してから**行う。その裁定点が
-feedback: フィードバックを取り込んで改訂サイクルを回すか、「実装は完全に fix」として
-cleanup → done でクローズするかは feedback 工程でユーザーが決める。
+コミット完了後、state.yaml を `phase: annotate` にして **dandori-annotate へ遷移する**。
+gate の後は annotate（消える Why のコメント保全）→ strip（テスト名の B-ID 等プロセス
+言及の除去）を経て feedback の安定点に入る — セッション外のレビュー・改訂の受け入れは、
+コードが dandori を知らない読者に見せられる状態になってから。不可逆な店じまい
+（cleanup — フィーチャードキュメント処分・墓碑コミット）は、feedback で
+「改訂はもう来ない」と確定してから行う。
 
-**trace.md はこの工程では処分しない** — 改訂サイクル中は最新の検証状況の記録として生き、
-最終的に cleanup が B 行↔テスト対応の作業リストとして使う。
+**trace.md はこの工程では処分しない** — strip が B 行↔テスト対応の作業リストとして使い、
+改訂サイクル中は最新の検証状況の記録として生きる。処分は cleanup の仕事。
 
 ## 完了条件
 
 - トレース表の全行が ✅（またはユーザー裁定による明示的な受容）
-- コミット済み、state.yaml が `phase: feedback`（cleanup のタイミング裁定は dandori-feedback が担う）
+- コミット済み、state.yaml が `phase: annotate`（クローズのタイミング裁定は dandori-feedback が担う）
