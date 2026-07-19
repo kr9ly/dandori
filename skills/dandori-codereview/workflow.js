@@ -8,7 +8,7 @@
 // 導出する — 新規実行が正しい再開手段。
 export const meta = {
   name: 'dandori-codereview',
-  description: 'dandori codereview 工程の決定的ループ — 入口検査 → 4レーン独立レビュー → 台帳追記 → 指摘ごと反証 → 修正 → check-docs ledger 収束判定',
+  description: 'dandori codereview 工程の決定的ループ — 入口検査 → 5レーン独立レビュー → 台帳追記 → 指摘ごと反証 → 修正 → check-docs ledger 収束判定',
   whenToUse: 'dandori-codereview スキル実行時、Workflow が使える環境で決定的な制御フローを機械駆動する。裁定（spec 波及・escalate 後・minor 採否）と state.yaml 更新はメインエージェントに返す。',
 }
 
@@ -237,6 +237,20 @@ ${COMMON_RULES}`,
 
 ${COMMON_RULES}`,
   },
+  fallback: {
+    label: 'フォールバック',
+    prompt: `${LANE_HEADER}
+
+照合先: ${SPEC} を読むこと。
+問い: diff 内の「異常・欠損・想定外の入力/状態を検出して**処理を継続する**」分岐
+（catch して継続・代替値での続行・沈黙スキップ・暗黙のデフォルト応答）のうち、
+その振る舞いを規定する B 行が存在しないものはないか。規定のない回復分岐は
+仕様にない振る舞いの発明として指摘せよ。エラーをそのまま送出・伝播するだけの
+分岐は対象外。
+走査対象の全数列挙: diff の全 hunk から回復分岐を列挙し、1 件ずつ B 行との対応を照合すること。
+
+${COMMON_RULES}`,
+  },
   integration: {
     label: '周辺整合',
     prompt: `${LANE_HEADER}
@@ -307,6 +321,8 @@ ${JSON.stringify(survivors.map(s => ({ id: s.id, severity: s.severity, lane: s.l
 - 指摘が design.md の記述とのズレを含む場合は design.md の発見ログに
   「[発見] <何が> <どう食い違うか> <対応>」形式で追記すること
 - テストを通すためにテスト側を弱める変更は禁止
+- ゲートを緑にするためにエラーを握りつぶす・フォールバックで迂回する変更は禁止 —
+  異常を検出して処理を継続する分岐は、その振る舞いを規定する B 行がある場合に限り書いてよい
 - lane=mutation の指摘（生存ミュータント）はテスト追加で殺すこと
 - 作成・変更するテストの名前（test タイトルまたは describe）に、検証対象の B 行 ID を含めること
 - 修正した指摘は台帳の該当行（ID で特定）の処置列を「反映済」にし、根拠・理由セルに対応を一行で記録すること
