@@ -90,6 +90,10 @@
  * map モード — survey 成果物（.dandori/map/*.md）の証拠アンカー死活検査:
  *   dandori-survey verify の手順 1〜2（hash 比較 → 変更ファイル取得 → アンカー走査）を
  *   機械化する。腐った主張の裁定・修正は verify 工程（ユーザー裁定）に残る。
+ *   アンカーの解決基準は既定で map ファイルが属する git リポジトリルート。worktree 並列
+ *   レーン等でソースルートが .dandori の所在と一致しない場合は --root <ソースルート> で
+ *   明示する（アンカー解決と git 照会（V1/V3）がそのルートのリポジトリに対して行われる —
+ *   skill 群の workRoot と同じ「明示指定」の方針。cwd からの自動推測はしない）。
  *   検査対象アンカー: 散文の「根拠: `パス`」と、dandori-state-map ブロックの anchor: 値
  *   V1. generated-at — ヘッダ欠落 / hash が git に存在しない（rebase 等で消失）
  *   V2. アンカー先消滅 — ファイル/ディレクトリなし、:行 / :開始-終了（行範囲）が EOF 超え、
@@ -138,7 +142,8 @@
  *   node check-docs.ts design <spec.md> <design.md>
  *   node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...> [--revision <n>]
  *   node check-docs.ts ledger <review-ledger.md>
- *   node check-docs.ts map <mapファイル.md...>（アンカーは map の git リポジトリルート相対）
+ *   node check-docs.ts map <mapファイル.md...> [--root <ソースルート>]
+ *     （アンカーはソースルートの git リポジトリルート相対。--root 省略時は map の所在から導出）
  *   node check-docs.ts state <state.yaml>
  *   node check-docs.ts residue <ファイル|ディレクトリ...>
  *
@@ -363,7 +368,7 @@ const USAGE =
   '       node check-docs.ts design <spec.md> <design.md>\n' +
   '       node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...> [--revision <n>]\n' +
   '       node check-docs.ts ledger <review-ledger.md>\n' +
-  '       node check-docs.ts map <mapファイル.md...>\n' +
+  '       node check-docs.ts map <mapファイル.md...> [--root <ソースルート>]\n' +
   '       node check-docs.ts state <state.yaml>\n' +
   '       node check-docs.ts residue <ファイル|ディレクトリ...>'
 
@@ -1358,8 +1363,20 @@ if (mode === 'state') {
 // ---- map モード -------------------------------------------------------------------
 
 if (mode === 'map') {
-  const mapPaths = argvRest.slice(1)
-  if (mapPaths.length === 0 || mapPaths.some(p => p.startsWith('--'))) { console.error(USAGE); process.exit(2) }
+  let rootArg: string | null = null
+  const mapPaths: string[] = []
+  for (let i = 1; i < argvRest.length; i++) {
+    const a = argvRest[i]
+    if (a === '--root') {
+      const v = argvRest[++i]
+      if (v === undefined) { console.error(`--root にはソースルートのパスを渡す\n${USAGE}`); process.exit(2) }
+      rootArg = v
+      continue
+    }
+    if (a.startsWith('--')) { console.error(`未知のオプション: ${a}\n${USAGE}`); process.exit(2) }
+    mapPaths.push(a)
+  }
+  if (mapPaths.length === 0) { console.error(USAGE); process.exit(2) }
 
   function git(cwd: string, args: string[]): string | null {
     try {
@@ -1394,10 +1411,14 @@ if (mode === 'map') {
   let totalClaims = 0, totalAnchors = 0
   for (const mapPath of mapPaths) {
     const lines = readLines(mapPath, 'map ファイル')
-    const mapDir = resolve(dirname(mapPath))
-    const repoRoot = git(mapDir, ['rev-parse', '--show-toplevel'])
+    // アンカー解決の基準 — 既定は map の所在から導出。worktree 並列レーン等で
+    // ソースルートが .dandori と一致しない場合は --root で明示されたルートを使う
+    const rootBase = rootArg !== null ? resolve(rootArg) : resolve(dirname(mapPath))
+    const repoRoot = git(rootBase, ['rev-parse', '--show-toplevel'])
     if (repoRoot === null) {
-      console.error(`${mapPath}: git リポジトリ内にない — アンカーの解決基準（リポジトリルート）を特定できない`)
+      console.error(rootArg !== null
+        ? `--root ${rootArg}: git リポジトリ内にない — アンカーの解決基準（リポジトリルート）を特定できない`
+        : `${mapPath}: git リポジトリ内にない — アンカーの解決基準（リポジトリルート）を特定できない（ソースが別の場所にあるなら --root で明示する）`)
       process.exit(2)
     }
     const rel = (p: string) => `${mapPath}: ${p}`
@@ -1410,7 +1431,7 @@ if (mode === 'map') {
       findings.push({ check: 'V1:generated-at', detail: rel('generated-at ヘッダがない — 鮮度検査の基準点を記録する（正準定義）') })
     } else {
       const hash = gen.m![1]
-      const diff = git(mapDir, ['diff', '--name-only', `${hash}..HEAD`])
+      const diff = git(repoRoot, ['diff', '--name-only', `${hash}..HEAD`])
       if (diff === null) {
         findings.push({
           check: 'V1:generated-at',
@@ -1508,7 +1529,8 @@ if (mode === 'map') {
     totalClaims += claims.length
   }
 
-  console.log(`# map アンカー死活検査レポート — ${mapPaths.join(', ')}`)
+  console.log(`# map アンカー死活検査レポート — ${mapPaths.join(', ')}` +
+    (rootArg !== null ? `（root: ${resolve(rootArg)}）` : ''))
   console.log(`主張 ${totalClaims} / アンカー ${totalAnchors}`)
   console.log('')
   finishReport()
