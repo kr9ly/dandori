@@ -329,12 +329,11 @@ ${JSON.stringify(survivors.map(s => ({ id: s.id, severity: s.severity, lane: s.l
 - 完了時に以下のゲートを自分で実行し、緑になるまで修正すること。生の出力の要点を gate_output で報告すること:
 ${GATES.map(g => `  - ${g}`).join('\n')}${workRootNote}`
 
-const zeroRoundPrompt = (round) => `指摘台帳 ${LEDGER} の末尾に次の 1 行をそのまま追記してください。他の行は変更しないこと:
-
-<!-- round: C Rd=${round} 指摘なし -->`
-
-const judgePrompt = `次のコマンドを実行し、出力とコマンドの exit code を報告してください:
-${CHECK} ledger ${LEDGER}
+// markZeroRound: 「指摘なし」ラウンドの番号。マーカー追記は check-docs の
+// --mark-zero-round（決定的・冪等）が行う — エージェントに台帳の自由編集をさせない
+// （マーカー追記の Edit が監査改竄と誤検知されエージェントがブロックされた実戦観測への対策）
+const judgePrompt = (markZeroRound) => `次のコマンドを実行し、出力とコマンドの exit code を報告してください:
+${CHECK} ledger ${LEDGER}${markZeroRound ? ` --mark-zero-round C ${markZeroRound}` : ''}
 
 出力の「C（dandori-codereview）」節の判定を verdict に対応づける:
 「passed」→ passed、「escalated」→ escalated、「継続」→ continue。
@@ -509,14 +508,11 @@ while (true) {
     // （過去ラウンド由来の再燃・停滞・形式不備を見逃さないため、再開セッションでも呼ぶ）
     let judge = null
     if (cRowsExist) {
-      if (verdicts.length === 0) {
-        // このラウンドは行を追記していない（指摘ゼロ / 全て反証済みの再生産）— マーカーが
-        // ないと check-docs は最後の行があるラウンドまでしか観測できず、過去の停滞パターン
-        // から escalated を返し続ける。「指摘なし」マーカーで今ラウンドを可視化する
-        await serializedLedger(() =>
-          agent(zeroRoundPrompt(round), { label: '台帳:ラウンド記録', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA }))
-      }
-      judge = await agent(judgePrompt, { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
+      // このラウンドが行を追記していない（指摘ゼロ / 全て反証済みの再生産）場合、マーカーが
+      // ないと check-docs は最後の行があるラウンドまでしか観測できず、過去の停滞パターン
+      // から escalated を返し続ける。「指摘なし」マーカーの追記は check-docs の
+      // --mark-zero-round に委ねる（決定的・冪等 — 収束判定と同一コマンドで済む）
+      judge = await agent(judgePrompt(verdicts.length === 0 ? round : null), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
     }
     // 完了条件は check-docs の exit 0（形式不備なし）まで含む — 未処置行や欠番を残して
     // passed を名乗らない
@@ -560,7 +556,7 @@ while (true) {
     log(`修正エージェントの報告から漏れた指摘: ${unhandled.map(s => s.id).join(', ')} — 台帳の未処置行として収束判定が検出する`)
   }
 
-  const judge = await agent(judgePrompt, { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
+  const judge = await agent(judgePrompt(null), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
   if (judge && judge.verdict === 'escalated') {
     return { status: 'escalated', judgeNotes: judge.notes || '', minors, lastRound: round, rounds: round - startRound + 1, ledger: LEDGER }
   }

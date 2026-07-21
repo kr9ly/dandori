@@ -316,12 +316,11 @@ ${JSON.stringify(items.map(f => ({ id: f.id, severity: f.severity, title: f.titl
   反映内容のセマンティクスを削る・弱めることはしないこと。exit 0 にできない場合はその旨を
   notes に書いて返すこと` : ''}`
 
-const zeroRoundPrompt = (round) => `指摘台帳 ${LEDGER} の末尾に次の 1 行をそのまま追記してください。他の行は変更しないこと:
-
-<!-- round: R Rd=${round} 指摘なし -->`
-
-const judgePrompt = `次のコマンドを実行し、出力とコマンドの exit code を報告してください:
-${CHECK} ledger ${LEDGER}
+// markZeroRound: 「指摘なし」ラウンドの番号。マーカー追記は check-docs の
+// --mark-zero-round（決定的・冪等）が行う — エージェントに台帳の自由編集をさせない
+// （マーカー追記の Edit が監査改竄と誤検知されエージェントがブロックされた実戦観測への対策）
+const judgePrompt = (markZeroRound) => `次のコマンドを実行し、出力とコマンドの exit code を報告してください:
+${CHECK} ledger ${LEDGER}${markZeroRound ? ` --mark-zero-round R ${markZeroRound}` : ''}
 
 出力の「R（dandori-review）」節の判定を verdict に対応づける:
 「passed」→ passed、「escalated」→ escalated、「継続」→ continue。
@@ -390,13 +389,11 @@ while (true) {
     }
     let judge = null
     if (rRowsExist) {
-      if (findings.length === 0) {
-        // このラウンドは行を追記していない — マーカーがないと check-docs は最後の行がある
-        // ラウンドまでしか観測できず、過去の停滞パターンから escalated を返し続ける。
-        // 「指摘なし」マーカーで今ラウンドを可視化する
-        await agent(zeroRoundPrompt(round), { label: '台帳:ラウンド記録', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA })
-      }
-      judge = await agent(judgePrompt, { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
+      // このラウンドが行を追記していない場合、マーカーがないと check-docs は最後の行がある
+      // ラウンドまでしか観測できず、過去の停滞パターンから escalated を返し続ける。
+      // 「指摘なし」マーカーの追記は check-docs の --mark-zero-round に委ねる
+      // （決定的・冪等 — 収束判定と同一コマンドで済む）
+      judge = await agent(judgePrompt(findings.length === 0 ? round : null), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
     }
     // 完了条件は check-docs の exit 0（形式不備なし）まで含む — 未処置行や欠番を残して
     // passed を名乗らない
@@ -471,7 +468,7 @@ while (true) {
   const rekindledSurvivors = survivors.filter(v => v.rekindleOf)
   if (rekindledSurvivors.length > 0) {
     log(`再燃生存: ${rekindledSurvivors.map(v => v.rekindleOf).join(', ')} — 反映をスキップして収束判定へ`)
-    const judge = await agent(judgePrompt, { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
+    const judge = await agent(judgePrompt(null), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
     return {
       status: 'escalated',
       reason: '既存論点が再指摘され反証も生き残った（再燃）— レビューアと処置の間で解釈が振動している',
@@ -487,7 +484,7 @@ while (true) {
   // 5. 生存ゼロ（全指摘が反証破棄）= 収束ラウンド — check-docs は反証破棄を生存数から
   //    除外するため、このラウンドの生存数は 0 として観測される
   if (survivors.length === 0) {
-    const judge = await agent(judgePrompt, { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
+    const judge = await agent(judgePrompt(null), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
     const clean = !judge || (judge.verdict !== 'escalated' && judge.exit_code === 0)
     return {
       status: clean ? 'passed' : 'escalated',
@@ -523,7 +520,7 @@ while (true) {
   }
 
   // 4. 収束判定（形式検査込み）
-  const judge = await agent(judgePrompt, { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
+  const judge = await agent(judgePrompt(null), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
   if (judge && judge.verdict === 'escalated') {
     return { status: 'escalated', judgeNotes: judge.notes || '', minors, lastRound: round, rounds: round - startRound + 1, ledger: LEDGER }
   }

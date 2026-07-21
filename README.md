@@ -242,6 +242,21 @@ cp -r dandori/skills/* ~/.claude/skills/
 cp -r dandori/skills/* <project>/.claude/skills/
 ```
 
+symlink で運用する場合（リポジトリの更新を追従したいとき）は、スキル単位の手張りでなく
+一括ループで張る — 手張りはスキル追加時の張り忘れが起きる（実績あり）:
+
+```bash
+for d in dandori/skills/*/; do
+  ln -sfn "$(realpath "$d")" ~/.claude/skills/"$(basename "$d")"
+done
+```
+
+導入後は、リポジトリと導入先のスキル数が一致するか突合する:
+
+```bash
+diff <(ls dandori/skills/) <(ls ~/.claude/skills/ | grep '^dandori')
+```
+
 ## 使い方
 
 ```

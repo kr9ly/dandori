@@ -63,11 +63,15 @@
  *       ユーザー裁定済みの保留は理由セルに裁定を書くことで検査対象外になる）
  *   指摘ゼロのラウンドは台帳に行が残らず観測できない（過去の停滞パターンから escalated を
  *   返し続ける）ため、`<!-- round: C Rd=7 指摘なし -->` 形式のマーカー行で記録する
- *   （blocker/major の行を追記したラウンドでは不要）。
+ *   （blocker/major の行を追記したラウンドでは不要）。マーカーの追記は
+ *   --mark-zero-round <R|C> <rd> で行う（決定的・冪等 — 検査・収束判定と同一コマンドで済む。
+ *   エージェントによるマーカーの自由編集は監査改竄と誤検知されブロックされた実戦観測があり、
+ *   このオプションが恒久対策 2026-07-21）。
  *   収束判定（指摘とは別枠 — exit code に影響しない）:
  *     passed = 最新ラウンド（マーカーのみのラウンド含む）の blocker+major がゼロ
  *              （反証破棄は R/C 共通で生存数から除外）
- *     escalated = 再燃→ がある（参照先が反証破棄の行は除く — 反証済みの再生産）、
+ *     escalated = 再燃→ がある（終端の再生産が反証破棄の連鎖は除く — 反証済みの再生産。
+ *                 参照が連鎖する場合は終端まで辿る 2026-07-21 改定）、
  *                 または 3 ラウンド以上連続で blocker+major 件数が減っておらず、かつ
  *                 最新ラウンドに未解消の再燃が含まれる（2026-07-10 改定）
  *     継続 = どちらでもない
@@ -116,8 +120,12 @@
  *   --revision <n> で差分トレース（継続改善サイクルの gate）: Rev が n 未満（無印 = 初回）の
  *   B 行は前サイクル検証済みの回帰扱い — B-ID の grep ヒットがなくても T1 を出さず、
  *   スイート緑 + skipped/todo 0 での担保を表に明記する。対応の正は前サイクルの gate コミット
+ *   --scope <ディレクトリ> で引用の優先スコープを指定できる（複数可）: 引用の収集は無制限、
+ *   表示は 5 件 + 残数注記で、スコープ配下の引用を先頭に並べる（他フィーチャー同番 B-ID の
+ *   ノイズが本命引用を押し出す実測への対処 — 対象フィーチャーのディレクトリを渡す）
  *   grep 候補は B-数字 開始のトークンに限定する（フィクスチャ文字列の B-ORDER 等を
- *   幽霊と誤検出しない）。括弧はバランスを保って正規化し（B-15(b) を壊さない）、
+ *   幽霊と誤検出しない）。括弧はバランスを保って正規化し（B-15(b) を壊さない）、括弧内は
+ *   ハイフンを許す（テストコメントの B-1(C-25) 注記形式 — 幽霊と誤検出しない）。
  *   spec にない括弧サフィックス付き ID はパラメタライズ表記として基底 B-ID に帰属させる
  *
  * residue モード — dandori-strip のプロセス言及残存検査:
@@ -140,8 +148,8 @@
  *     （fix 済み spec を再編集したとき: git show HEAD:<path> > /tmp/base.md で取り出す）
  *   node check-docs.ts plan <spec.md> <plan.md>
  *   node check-docs.ts design <spec.md> <design.md>
- *   node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...> [--revision <n>]
- *   node check-docs.ts ledger <review-ledger.md>
+ *   node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...> [--revision <n>] [--scope <優先ディレクトリ>...]
+ *   node check-docs.ts ledger <review-ledger.md> [--mark-zero-round <R|C> <rd>]
  *   node check-docs.ts map <mapファイル.md...> [--root <ソースルート>]
  *     （アンカーはソースルートの git リポジトリルート相対。--root 省略時は map の所在から導出）
  *   node check-docs.ts state <state.yaml>
@@ -154,10 +162,11 @@
 declare const process: { argv: string[]; exit(code: number): never }
 
 // @ts-ignore -- 依存なし実行のため @types/node を入れていない
-const { readFileSync, readdirSync, statSync } = await import('node:fs') as {
+const { readFileSync, readdirSync, statSync, appendFileSync } = await import('node:fs') as {
   readFileSync(path: string, enc: string): string
   readdirSync(path: string): string[]
   statSync(path: string): { isDirectory(): boolean; size: number }
+  appendFileSync(path: string, data: string): void
 }
 // @ts-ignore -- 同上
 const { join, dirname, resolve } = await import('node:path') as {
@@ -366,8 +375,8 @@ const USAGE =
   'usage: node check-docs.ts spec <spec.md> [--baseline <旧spec.md>]\n' +
   '       node check-docs.ts plan <spec.md> <plan.md>\n' +
   '       node check-docs.ts design <spec.md> <design.md>\n' +
-  '       node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...> [--revision <n>]\n' +
-  '       node check-docs.ts ledger <review-ledger.md>\n' +
+  '       node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...> [--revision <n>] [--scope <優先ディレクトリ>...]\n' +
+  '       node check-docs.ts ledger <review-ledger.md> [--mark-zero-round <R|C> <rd>]\n' +
   '       node check-docs.ts map <mapファイル.md...> [--root <ソースルート>]\n' +
   '       node check-docs.ts state <state.yaml>\n' +
   '       node check-docs.ts residue <ファイル|ディレクトリ...>'
@@ -911,9 +920,45 @@ if (mode === 'design') {
 // ---- ledger モード ----------------------------------------------------------------
 
 if (mode === 'ledger') {
-  const paths = argvRest.slice(1)
-  if (paths.length !== 1 || paths[0].startsWith('--')) { console.error(USAGE); process.exit(2) }
+  let markPrefix: string | null = null
+  let markRd: number | null = null
+  const paths: string[] = []
+  for (let i = 1; i < argvRest.length; i++) {
+    const a = argvRest[i]
+    if (a === '--mark-zero-round') {
+      const p = argvRest[++i]
+      const v = argvRest[++i]
+      if ((p !== 'R' && p !== 'C') || v === undefined || !/^[1-9]\d*$/.test(v)) {
+        console.error(`--mark-zero-round には接頭辞（R | C）とラウンド番号（正の整数）を渡す\n${USAGE}`)
+        process.exit(2)
+      }
+      markPrefix = p
+      markRd = Number(v)
+      continue
+    }
+    if (a.startsWith('--')) { console.error(`未知のオプション: ${a}\n${USAGE}`); process.exit(2) }
+    paths.push(a)
+  }
+  if (paths.length !== 1) { console.error(USAGE); process.exit(2) }
   const ledgerPath = paths[0]
+
+  // 「指摘なし」マーカーの決定的追記 — マーカー文言はここで固定され、追記に
+  // サブエージェントの自由編集を挟まない（エージェントによるマーカー追記が
+  // 監査改竄と誤検知されブロックされた実戦観測 2026-07-21 への恒久対策）。
+  // 冪等 — 同一マーカーが既にあれば何もしない。追記後は通常の検査・収束判定に続く
+  if (markPrefix !== null && markRd !== null) {
+    const marker = `<!-- round: ${markPrefix} Rd=${markRd} 指摘なし -->`
+    const text = readLines(ledgerPath, '台帳').join('\n')
+    const already = new RegExp(`<!--\\s*round:\\s*${markPrefix}\\s+Rd=${markRd}\\s+指摘なし\\s*-->`).test(text)
+    if (already) {
+      console.log(`マーカー既存 — 追記なし: ${marker}`)
+    } else {
+      appendFileSync(ledgerPath, `${text.endsWith('\n') ? '' : '\n'}${marker}\n`)
+      console.log(`マーカー追記: ${marker}`)
+    }
+    console.log('')
+  }
+
   const lines = readLines(ledgerPath, '台帳')
 
   interface LedgerRow {
@@ -1053,11 +1098,23 @@ if (mode === 'ledger') {
       }
     }
 
-    // escalate 条件 1: 再燃（参照先が反証破棄なら「反証済みの再生産」— 対象外）
-    const rekindled = prows.filter(r => {
-      const m = r.action.match(/^再燃→\s*(\S+)$/)
-      return m !== null && rowById.get(m[1])?.action !== '反証破棄'
-    })
+    // escalate 条件 1: 再燃（終端の再生産が反証破棄なら「反証済みの再生産」— 対象外）。
+    // 参照は連鎖し得る（Rd2 却下 → 再燃→C-a → C-a も 再燃→C-b → C-b 反証破棄）ため
+    // 終端まで辿る — 直接参照先だけ見ると、裁定済み論点の再生産が反証フェーズで
+    // 正しく破棄され続けていても古いマーカーが escalate を返し続ける（2026-07-21 実戦観測）
+    const terminalAction = (r: LedgerRow): string => {
+      const seen = new Set<string>()
+      let cur: LedgerRow | undefined = r
+      while (cur) {
+        const m = cur.action.match(/^再燃→\s*(\S+)$/)
+        if (!m) return cur.action
+        if (seen.has(cur.id)) return cur.action // 循環参照 — 安全側で生存扱い
+        seen.add(cur.id)
+        cur = rowById.get(m[1]) // 参照先欠落は L3 が報告する — ここでは生存扱いになる
+      }
+      return ''
+    }
+    const rekindled = prows.filter(r => /^再燃→/.test(r.action) && terminalAction(r) !== '反証破棄')
     // escalate 条件 2: 直近 3 ラウンドで blocker+major が減っておらず、かつ最新ラウンドに
     // 未解消の再燃が含まれる（2026-07-10 改定: 件数の非減少だけでは「毎ラウンド異なる新規の
     // 事実発見が続く健全な収束過程」と「解釈の振動」を区別できない — modelh-cart-core Rd1〜3 の
@@ -1541,6 +1598,11 @@ if (mode === 'map') {
 const SCAN_SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', 'vendor', 'target', '.dandori'])
 const SCAN_MAX_FILE_SIZE = 1024 * 1024
 
+// B-ID トークンの grep パターン。括弧内は補足注記としてハイフンを許す
+// （テストコメントの B-1(C-25): 形式 — 括弧の外にハイフンを許すと B-3-B-4 等の
+// 連結表記を丸ごと 1 トークンに食ってしまうため、括弧内に限定する）
+const B_TOKEN_RE = /B-[\w.]+(?:\([\w.-]*\))?/g
+
 /** grep トークンを B-ID に正規化する。B-ID 候補でないもの（B-ORDER 等）は null */
 function normalizeBIdToken(raw: string): string | null {
   let id = raw.replace(/\.+$/, '') // 文末ピリオド由来のゴミを除去
@@ -1575,6 +1637,7 @@ function walkFiles(path: string, onFile: (path: string) => void): void {
 
 if (mode === 'trace') {
   let traceRevision: number | null = null
+  const scopes: string[] = []
   const paths: string[] = []
   for (let i = 1; i < argvRest.length; i++) {
     const a = argvRest[i]
@@ -1582,6 +1645,12 @@ if (mode === 'trace') {
       const v = argvRest[++i]
       if (v === undefined || !/^[1-9]\d*$/.test(v)) { console.error(`--revision には正の整数を渡す\n${USAGE}`); process.exit(2) }
       traceRevision = Number(v)
+      continue
+    }
+    if (a === '--scope') {
+      const v = argvRest[++i]
+      if (v === undefined || v.startsWith('--')) { console.error(`--scope にはディレクトリプレフィックスを渡す\n${USAGE}`); process.exit(2) }
+      scopes.push(v.replace(/\/+$/, '') + '/')
       continue
     }
     if (a.startsWith('--')) { console.error(`未知のオプション: ${a}\n${USAGE}`); process.exit(2) }
@@ -1609,17 +1678,17 @@ if (mode === 'trace') {
     scannedFiles++
     text.split('\n').forEach((line, idx) => {
       const skipped = SKIP_TEST.test(line)
-      for (const raw of line.match(/B-[\w.()]+/g) ?? []) {
+      for (const raw of line.match(B_TOKEN_RE) ?? []) {
         let id = normalizeBIdToken(raw)
         if (id === null) continue
         if (!specIds.has(id)) {
-          // spec にない括弧サフィックス付き ID（B-15(b) 等のパラメタライズ表記）は基底 B-ID に帰属
-          const base = id.match(/^(B-\d[\w.]*)\([\w.]*\)$/)
+          // spec にない括弧サフィックス付き ID（B-15(b) のパラメタライズ表記や
+          // B-1(C-25) の指摘 ID 注記）は基底 B-ID に帰属
+          const base = id.match(/^(B-\d[\w.]*)\([\w.-]*\)$/)
           if (base && specIds.has(base[1])) id = base[1]
         }
         if (!hits.has(id)) hits.set(id, [])
-        const list = hits.get(id)!
-        if (list.length < 5) list.push(`${path}:${idx + 1}`) // 根拠は 5 件で打ち切り
+        hits.get(id)!.push(`${path}:${idx + 1}`)
         if (skipped) {
           if (!skipHits.has(id)) skipHits.set(id, [])
           skipHits.get(id)!.push(`${path}:${idx + 1}`)
@@ -1628,6 +1697,15 @@ if (mode === 'trace') {
     })
   }
   for (const root of scanRoots) walkFiles(root, scanFile)
+
+  // 引用の表示整形 — --scope 指定ディレクトリ配下を先頭に並べ、5 件で切って残数を注記する
+  // （収集は無制限 — 他フィーチャー同番 B-ID のノイズが本命引用を押し出さないため）
+  const inScope = (loc: string) => scopes.some(s => loc.startsWith(s))
+  function citeList(locs: string[]): string {
+    const ordered = scopes.length > 0 ? [...locs.filter(inScope), ...locs.filter(l => !inScope(l))] : locs
+    if (ordered.length <= 5) return ordered.join(', ')
+    return `${ordered.slice(0, 5).join(', ')}（他 ${ordered.length - 5} 件）`
+  }
 
   // トレース表の叩き台（unit/e2e/formal はテスト対応が必要。visual/manual は最終ゲートで確認）
   const NEEDS_TEST = new Set(['unit', 'e2e', 'formal'])
@@ -1661,7 +1739,7 @@ if (mode === 'trace') {
     }
     if (tags.some(t => NEEDS_TEST.has(t))) {
       if (found.length > 0) {
-        console.log(`| ${b.id} | ${gate} | ⏳ 要再実行 | ${found.join(', ')} |`)
+        console.log(`| ${b.id} | ${gate} | ⏳ 要再実行 | ${citeList(found)} |`)
       } else {
         console.log(`| ${b.id} | ${gate} | ⚠️ 未検証候補 | B-ID の grep ヒットなし |`)
         findings.push({
@@ -1673,7 +1751,7 @@ if (mode === 'trace') {
     } else if (tags.includes('manual')) {
       console.log(`| ${b.id} | ${gate} | ⏳ ユーザー確認待ち | 確認手順を B 行から生成する |`)
     } else {
-      console.log(`| ${b.id} | ${gate} | ⏳ 要確認 | ${found.length > 0 ? found.join(', ') : '—'} |`)
+      console.log(`| ${b.id} | ${gate} | ⏳ 要確認 | ${found.length > 0 ? citeList(found) : '—'} |`)
     }
   }
   console.log('')
@@ -1683,12 +1761,12 @@ if (mode === 'trace') {
     if (struckIds.has(id)) {
       findings.push({
         check: 'T3:削除済み参照',
-        detail: `削除済み（取り消し線）の ${id} を参照するテストがある: ${locs.join(', ')}`,
+        detail: `削除済み（取り消し線）の ${id} を参照するテストがある: ${citeList(locs)}`,
       })
     } else if (!specIds.has(id)) {
       findings.push({
         check: 'T2:幽霊B-ID',
-        detail: `テストコード中の ${id} が spec にない（typo か spec の陳腐化）: ${locs.join(', ')}`,
+        detail: `テストコード中の ${id} が spec にない（typo か spec の陳腐化）: ${citeList(locs)}`,
       })
     }
   }
@@ -1698,7 +1776,7 @@ if (mode === 'trace') {
     if (!specIds.has(id)) continue // 幽霊は T2 で報告済み
     findings.push({
       check: 'T4:skipされたテスト',
-      detail: `${id} のテストが skip / todo 指定されている — スイートが緑でも実行されていない: ${locs.join(', ')}`,
+      detail: `${id} のテストが skip / todo 指定されている — スイートが緑でも実行されていない: ${citeList(locs)}`,
     })
   }
 
@@ -1735,7 +1813,7 @@ if (mode === 'residue') {
         if (line.includes('dandori-ok:')) { exemptLines++; exemptNext = true; return }
         if (exemptNext) { exemptLines++; exemptNext = false; return }
         const loc = `${path}:${idx + 1}`
-        for (const raw of line.match(/B-[\w.()]+/g) ?? []) {
+        for (const raw of line.match(B_TOKEN_RE) ?? []) {
           const id = normalizeBIdToken(raw)
           if (id === null) continue
           findings.push({

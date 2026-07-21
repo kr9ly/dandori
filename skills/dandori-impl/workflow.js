@@ -188,6 +188,10 @@ const implPrompt = (m, brief, gates) => `以下のブリーフに従って実装
 
 ${brief}${workRootNote}
 
+前提の確認: working tree には先行の実装試行（エージェントの接続断・中断等）による
+部分実装が残っている可能性がある。ブリーフを未実装前提と決めつけず、対象箇所の
+現状確認から始めること — すでに実装済みの部分は重複実装せず、ブリーフとの差分だけを埋める。
+
 ルール:
 - 不変条件に抵触する変更が必要になったら、実装せず停止して報告すること
   （halted=true + halt_reason。その場合 gates_green=false、gate_output は「未実行」とする）
