@@ -75,6 +75,10 @@
  *                 または 3 ラウンド以上連続で blocker+major 件数が減っておらず、かつ
  *                 最新ラウンドに未解消の再燃が含まれる（2026-07-10 改定）
  *     継続 = どちらでもない
+ *   判定は人間向けの「判定: <語>」行に加えて機械可読な `[verdict] R=<token>` /
+ *   `[verdict] C=<token>`（token = passed | escalated | continue）を出力する —
+ *   workflow の収束判定エージェントはこの行を逐語転記し、verdict へのマッピングは
+ *   workflow スクリプトが決定的に行う（エージェントの意味的マッピング誤りの排除 2026-07-22）
  *
  * state モード — state.yaml の整合検査（ルーターの再開判定の足場）:
  *   Y1. 語彙・形式 — course / phase / 各工程 status の語彙、数値フィールド、
@@ -161,21 +165,26 @@
 // 依存なし実行のため @types/node を入れていない
 declare const process: { argv: string[]; exit(code: number): never }
 
+// 静的 import で書く（top-level await は ESM 専用構文 — tsx 等が CJS と判定した環境で
+// SyntaxError になる実戦観測 2026-07-22。静的 import は CJS 変換でも ESM でも動く）
 // @ts-ignore -- 依存なし実行のため @types/node を入れていない
-const { readFileSync, readdirSync, statSync, appendFileSync } = await import('node:fs') as {
+import * as _fs from 'node:fs'
+// @ts-ignore -- 同上
+import * as _path from 'node:path'
+// @ts-ignore -- 同上
+import * as _cp from 'node:child_process'
+const { readFileSync, readdirSync, statSync, appendFileSync } = _fs as {
   readFileSync(path: string, enc: string): string
   readdirSync(path: string): string[]
   statSync(path: string): { isDirectory(): boolean; size: number }
   appendFileSync(path: string, data: string): void
 }
-// @ts-ignore -- 同上
-const { join, dirname, resolve } = await import('node:path') as {
+const { join, dirname, resolve } = _path as {
   join(...p: string[]): string
   dirname(p: string): string
   resolve(...p: string[]): string
 }
-// @ts-ignore -- 同上
-const { execFileSync } = await import('node:child_process') as {
+const { execFileSync } = _cp as {
   execFileSync(cmd: string, args: string[], opts: { cwd: string; encoding: string; stdio: unknown[] }): string
 }
 
@@ -1154,6 +1163,10 @@ if (mode === 'ledger') {
     }
     if (stalled) console.log('停滞: 3 ラウンド以上連続で blocker+major が減っておらず、最新ラウンドに未解消の再燃がある')
     console.log(`判定: ${verdict}`)
+    // 機械可読行 — workflow の収束判定はこの行の逐語転記をスクリプト側で正規表現マッピングする。
+    // 判定エージェントに意味的マッピングをさせると「継続」を escalated に誤対応づける
+    // 自由裁量事故が起きる（2026-07-22 実戦観測）— 転記のみに縮退させるための固定トークン
+    console.log(`[verdict] ${prefix}=${verdict === '継続' ? 'continue' : verdict}`)
     console.log('')
   }
 

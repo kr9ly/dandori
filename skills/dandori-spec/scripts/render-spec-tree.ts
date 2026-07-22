@@ -243,8 +243,11 @@ if (!specPath) {
   process.exit(2)
 }
 
+// 静的 import で書く（top-level await は ESM 専用構文 — tsx 等が CJS と判定した環境で
+// SyntaxError になる実戦観測 2026-07-22。静的 import は CJS 変換でも ESM でも動く）
 // @ts-ignore -- 依存なし実行のため @types/node を入れていない
-const { readFileSync } = await import('node:fs') as { readFileSync(p: string, e: string): string }
+import * as _fs from 'node:fs'
+const { readFileSync } = _fs as unknown as { readFileSync(p: string, e: string): string }
 
 let specLines: string[]
 try {

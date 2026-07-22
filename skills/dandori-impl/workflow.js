@@ -52,15 +52,24 @@ const MAX_FIX_ROUNDS = A.maxFixRounds || 2
 
 // 作業ルート（任意）— サブエージェントはセッションの主作業ディレクトリで動くため、コードが
 // 別の場所（レーン worktree 等）にあるときはプロンプト注入で作業場所を固定する。
-// plan.md 側の手パッチ（ゲートへの cd プレフィックス等）に依存しない
+// plan.md 側の手パッチ（ゲートへの cd プレフィックス等）に依存しない。
+// spec ドキュメント（design.md 発見ログ等）は閉じ込めの適用除外 — 除外を明示しないと
+// worktree 内に複製が作られ書き先が分裂する（codereview 側の 2026-07-22 実戦観測・
+// 台帳二重化と同型）。workRoot 併用時は specDir に絶対パスを要求する
 const WORK_ROOT = A.workRoot ? A.workRoot.replace(/\/+$/, '') : null
+if (WORK_ROOT && !SPEC_DIR.startsWith('/')) {
+  throw new Error(`workRoot 指定時は specDir を絶対パスで渡すこと（現在: ${SPEC_DIR}）— design.md 等の書き先が worktree 内に複製されるのを防ぐため`)
+}
 const workRootNote = WORK_ROOT
   ? `
 
 作業ルート: ${WORK_ROOT}
 - コードの読み書き・ゲート実行はすべてこのディレクトリ内で行うこと
 - 相対パス（src/ 等）はこのルート基準。ゲートは \`cd ${WORK_ROOT} && <コマンド>\` で実行する
-- このディレクトリ外のコード（他の worktree・リポジトリ）を変更しないこと`
+- このディレクトリ外のコード（他の worktree・リポジトリ）を変更しないこと
+- **例外（dandori ドキュメント）**: spec・design 等の .dandori 配下ドキュメントは
+  ${SPEC_DIR} （絶対パス）だけが正。読み書きは必ずこのパスで行い、${WORK_ROOT} 内に
+  .dandori や design.md の複製を作らないこと`
   : ''
 
 // ---- schemas ---------------------------------------------------------------

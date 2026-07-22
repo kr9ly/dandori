@@ -294,11 +294,15 @@ if (inputPaths.length === 0 || (impactId === null && inputPaths.length !== 1)) {
   process.exit(2)
 }
 
+// 静的 import で書く（top-level await は ESM 専用構文 — tsx 等が CJS と判定した環境で
+// SyntaxError になる実戦観測 2026-07-22。静的 import は CJS 変換でも ESM でも動く）
 // @ts-ignore -- 依存なし実行のため @types/node を入れていない
-const { readFileSync, existsSync } = await import('node:fs') as
-  { readFileSync(path: string, enc: string): string; existsSync(p: string): boolean }
+import * as _fs from 'node:fs'
 // @ts-ignore -- 同上
-const { dirname, join, resolve } = await import('node:path') as
+import * as _path from 'node:path'
+const { readFileSync, existsSync } = _fs as unknown as
+  { readFileSync(path: string, enc: string): string; existsSync(p: string): boolean }
+const { dirname, join, resolve } = _path as unknown as
   { dirname(p: string): string; join(...p: string[]): string; resolve(p: string): string }
 
 function readLines(path: string, what: string): string[] {

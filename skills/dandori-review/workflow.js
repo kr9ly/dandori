@@ -68,15 +68,24 @@ const SM_CHECK = A.checkStateModel || null
 const MAX_ROUNDS = A.maxRounds || 8
 
 // 作業ルート（任意）— サブエージェントはセッションの主作業ディレクトリで動くため、コードが
-// 別の場所（レーン worktree 等）にあるときはプロンプト注入で参照先を固定する
+// 別の場所（レーン worktree 等）にあるときはプロンプト注入で参照先を固定する。
+// 台帳・spec ドキュメントは閉じ込めの適用除外 — 除外を明示しないと worktree 内に台帳の
+// 複製が作られ書き先が分裂する（codereview 側の 2026-07-22 実戦観測・台帳二重化と同型）。
+// workRoot 併用時は specDir に絶対パスを要求する
 const WORK_ROOT = A.workRoot ? A.workRoot.replace(/\/+$/, '') : null
+if (WORK_ROOT && !SPEC_DIR.startsWith('/')) {
+  throw new Error(`workRoot 指定時は specDir を絶対パスで渡すこと（現在: ${SPEC_DIR}）— 台帳・spec の書き先が worktree 内に複製されるのを防ぐため`)
+}
 const workRootNote = WORK_ROOT
   ? `
 
 作業ルート: ${WORK_ROOT}
 - 検証対象のコードベースはこのディレクトリ。コードの読み取り・コマンド実行はこの中で行うこと
 - 指摘・反証の根拠（ファイル:行）の相対パス（src/ 等）はこのルート基準
-- 他の worktree・リポジトリのコードを検証対象と取り違えないこと`
+- 他の worktree・リポジトリのコードを検証対象と取り違えないこと
+- **例外（dandori ドキュメント）**: 台帳・spec・design 等の .dandori 配下ドキュメントは
+  ${SPEC_DIR} （絶対パス）だけが正。読み書きは必ずこのパスで行い、${WORK_ROOT} 内に
+  .dandori や台帳の複製を作らないこと`
   : ''
 
 // ---- schemas ---------------------------------------------------------------
@@ -154,14 +163,31 @@ const VERDICT_SCHEMA = {
   },
 }
 
+// verdict はエージェントに意味づけさせない — checker 出力の [verdict] 行の逐語転記だけを
+// 求め、マッピングは judgeVerdict()（スクリプト側・決定的）が行う。エージェントの意味的
+// マッピングは「継続」を escalated に誤対応づける事故を起こした（codereview 側の
+// 2026-07-22 実戦観測 — --mark-zero-round と同じ「エージェント自由裁量の排除」方針）
 const JUDGE_SCHEMA = {
   type: 'object',
-  required: ['verdict', 'exit_code'],
+  required: ['verdict_line', 'exit_code'],
   properties: {
-    verdict: { type: 'string', enum: ['passed', 'escalated', 'continue'] },
+    verdict_line: { type: ['string', 'null'], description: '出力中の「[verdict] R=...」行の逐語転記（出力にその行がなければ null）' },
     exit_code: { type: 'integer', description: 'コマンドの exit code（0 = 形式指摘なし）' },
     notes: { type: 'string', description: '再燃・停滞・形式指摘があればその内容' },
   },
+}
+
+// [verdict] R=<token> をスクリプト側で決定的にマッピングする。行がない・転記が崩れている
+// 場合は continue（従来の「R 系列の節が出力にない場合は continue」と同じ安全側 —
+// ループは maxRounds がバックストップする）
+const judgeVerdict = (judge) => {
+  if (!judge || !judge.verdict_line) return 'continue'
+  const m = String(judge.verdict_line).match(/\[verdict\]\s*R=(passed|escalated|continue)/)
+  if (!m) {
+    log(`収束判定の verdict 行が解釈不能（"${judge.verdict_line}"）— continue として続行`)
+    return 'continue'
+  }
+  return m[1]
 }
 
 const ACK_SCHEMA = {
@@ -322,9 +348,8 @@ ${JSON.stringify(items.map(f => ({ id: f.id, severity: f.severity, title: f.titl
 const judgePrompt = (markZeroRound) => `次のコマンドを実行し、出力とコマンドの exit code を報告してください:
 ${CHECK} ledger ${LEDGER}${markZeroRound ? ` --mark-zero-round R ${markZeroRound}` : ''}
 
-出力の「R（dandori-review）」節の判定を verdict に対応づける:
-「passed」→ passed、「escalated」→ escalated、「継続」→ continue。
-R 系列の節が出力にない場合は continue。
+出力中の「[verdict] R=...」で始まる行を**一字一句そのまま** verdict_line に転記すること
+（解釈・言い換え・要約をしない）。その行が出力にない場合は verdict_line を null にする。
 再燃・停滞の行や台帳の形式指摘（exit 1 の指摘一覧）があれば notes に要約すること。
 （保留の minor 行は採否待ちの正常状態であり形式指摘ではない）`
 
@@ -397,7 +422,7 @@ while (true) {
     }
     // 完了条件は check-docs の exit 0（形式不備なし）まで含む — 未処置行や欠番を残して
     // passed を名乗らない
-    const clean = !judge || (judge.verdict !== 'escalated' && judge.exit_code === 0)
+    const clean = !judge || (judgeVerdict(judge) !== 'escalated' && judge.exit_code === 0)
     return {
       status: clean ? 'passed' : 'escalated',
       rounds: round - startRound + 1,
@@ -485,7 +510,7 @@ while (true) {
   //    除外するため、このラウンドの生存数は 0 として観測される
   if (survivors.length === 0) {
     const judge = await agent(judgePrompt(null), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
-    const clean = !judge || (judge.verdict !== 'escalated' && judge.exit_code === 0)
+    const clean = !judge || (judgeVerdict(judge) !== 'escalated' && judge.exit_code === 0)
     return {
       status: clean ? 'passed' : 'escalated',
       rounds: round - startRound + 1,
@@ -521,7 +546,7 @@ while (true) {
 
   // 4. 収束判定（形式検査込み）
   const judge = await agent(judgePrompt(null), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
-  if (judge && judge.verdict === 'escalated') {
+  if (judgeVerdict(judge) === 'escalated') {
     return { status: 'escalated', judgeNotes: judge.notes || '', minors, lastRound: round, rounds: round - startRound + 1, ledger: LEDGER }
   }
 
