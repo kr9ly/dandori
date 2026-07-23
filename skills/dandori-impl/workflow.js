@@ -72,6 +72,18 @@ const workRootNote = WORK_ROOT
   .dandori や design.md の複製を作らないこと`
   : ''
 
+// agent() は無応答（ユーザー skip / 終端 API エラー）では null を返すが、StructuredOutput の
+// リトライ上限（5 回）超過などでは reject する — throw を伝播させると workflow 全体が failed になり、
+// ディスク上の台帳・state が正しくても部分成功ごと失われる（2026-07-23 実戦観測・529 死亡とは別原因）。
+// throw は null に縮退させ、既存の無応答パス（安全側の分岐 + 新規実行での再開）へ合流させる
+const tryAgent = (prompt, opts) => agent(prompt, opts).then(
+  (r) => r,
+  (e) => {
+    log(`エージェント失敗（${(opts && opts.label) || '?'}）: ${(e && e.message) || e} — 無応答（null）として縮退`)
+    return null
+  },
+)
+
 // ---- schemas ---------------------------------------------------------------
 
 const SETUP_SCHEMA = {
@@ -272,13 +284,13 @@ ${JSON.stringify(discoveries.map(d => ({ what: d.what, mismatch: d.mismatch, res
 // 返し、メインに追記を委ねる
 async function recordDiscoveries(m, discoveries, phase) {
   if (discoveries.length === 0) return true
-  const ack = await agent(recordPrompt(m, discoveries), { label: `発見記録:${m.id}`, phase, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA })
+  const ack = await tryAgent(recordPrompt(m, discoveries), { label: `発見記録:${m.id}`, phase, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA })
   return Boolean(ack && ack.done)
 }
 
 // ---- メインループ（逐次 — 並列化はメインの領分）--------------------------------
 
-const setup = await agent(setupPrompt, { label: '入口確認', phase: '入口確認', model: 'sonnet', effort: 'low', schema: SETUP_SCHEMA })
+const setup = await tryAgent(setupPrompt, { label: '入口確認', phase: '入口確認', model: 'sonnet', effort: 'low', schema: SETUP_SCHEMA })
 if (!setup) throw new Error('入口確認エージェントが結果を返さなかった')
 if (!setup.files_ok) {
   return { status: 'blocked', reason: `plan.md / state.yaml の欠落・不整合: ${setup.missing || '不明'}` }
@@ -295,7 +307,7 @@ const allDiscoveries = []
 
 for (const m of remaining) {
   // 1. ブリーフ組み立て（抽出係 — マニフェスト記載セクションだけを取り出す）
-  const briefed = await agent(briefPrompt(m), { label: `ブリーフ:${m.id}`, phase: `${m.id} ブリーフ`, model: 'sonnet', schema: BRIEF_SCHEMA })
+  const briefed = await tryAgent(briefPrompt(m), { label: `ブリーフ:${m.id}`, phase: `${m.id} ブリーフ`, model: 'sonnet', schema: BRIEF_SCHEMA })
   if (!briefed) {
     return { status: 'blocked', reason: `${m.id}: ブリーフ組み立て係が結果を返さなかった`, completed, discoveries: allDiscoveries }
   }
@@ -305,7 +317,7 @@ for (const m of remaining) {
 
   // 2. 実装ディスパッチ（モデルはセッション継承 — 実装は能力が要る）。
   //    プロンプトに spec/design のパスを渡さない = 全文を読ませない（希釈防止）
-  let report = await agent(implPrompt(m, briefed.brief, briefed.gates), { label: `実装:${m.id}`, phase: `${m.id} 実装`, schema: IMPL_SCHEMA })
+  let report = await tryAgent(implPrompt(m, briefed.brief, briefed.gates), { label: `実装:${m.id}`, phase: `${m.id} 実装`, schema: IMPL_SCHEMA })
   if (!report) {
     return { status: 'gate_red', reason: `${m.id}: 実装エージェントが結果を返さなかった — working tree の状態をメインで確認すること`, completed, discoveries: allDiscoveries }
   }
@@ -316,12 +328,12 @@ for (const m of remaining) {
   }
 
   // 3. ゲート検証 — 実装エージェントの「通りました」を信用せず独立に再実行
-  let verified = await agent(verifyPrompt(briefed.gates), { label: `ゲート検証:${m.id}`, phase: `${m.id} 検証`, model: 'sonnet', effort: 'low', schema: VERIFY_SCHEMA })
+  let verified = await tryAgent(verifyPrompt(briefed.gates), { label: `ゲート検証:${m.id}`, phase: `${m.id} 検証`, model: 'sonnet', effort: 'low', schema: VERIFY_SCHEMA })
   let fixRounds = 0
   while ((!verified || !verified.green) && fixRounds < MAX_FIX_ROUNDS) {
     fixRounds += 1
     log(`${m.id}: ゲート赤 — 修正ディスパッチ ${fixRounds}/${MAX_FIX_ROUNDS}`)
-    const fix = await agent(fixPrompt(m, briefed.brief, briefed.gates, verified ? verified.gate_output : '検証エージェント無応答'), { label: `修正:${m.id}#${fixRounds}`, phase: `${m.id} 実装`, schema: IMPL_SCHEMA })
+    const fix = await tryAgent(fixPrompt(m, briefed.brief, briefed.gates, verified ? verified.gate_output : '検証エージェント無応答'), { label: `修正:${m.id}#${fixRounds}`, phase: `${m.id} 実装`, schema: IMPL_SCHEMA })
     if (!fix) break
     if (fix.halted) {
       const pending = [...report.discoveries, ...fix.discoveries].map(d => ({ ...d, milestone: m.id }))
@@ -329,7 +341,7 @@ for (const m of remaining) {
       return { status: 'halted', milestone: m.id, reason: fix.halt_reason || '不変条件抵触（詳細未報告）', discoveries: [...allDiscoveries, ...pending], discoveriesRecorded: recorded, completed }
     }
     report = { ...report, discoveries: [...report.discoveries, ...fix.discoveries] }
-    verified = await agent(verifyPrompt(briefed.gates), { label: `ゲート検証:${m.id}#${fixRounds}`, phase: `${m.id} 検証`, model: 'sonnet', effort: 'low', schema: VERIFY_SCHEMA })
+    verified = await tryAgent(verifyPrompt(briefed.gates), { label: `ゲート検証:${m.id}#${fixRounds}`, phase: `${m.id} 検証`, model: 'sonnet', effort: 'low', schema: VERIFY_SCHEMA })
   }
   if (!verified || !verified.green) {
     const pending = report.discoveries.map(d => ({ ...d, milestone: m.id }))
@@ -347,7 +359,7 @@ for (const m of remaining) {
   // 4. [発見] の還流 — design.md 発見ログへの追記（全件）+ 影響分類
   let specImpacts = []
   if (report.discoveries.length > 0) {
-    const handled = await agent(discoveryPrompt(m, report.discoveries), { label: `発見還流:${m.id}`, phase: `${m.id} 還流`, model: 'sonnet', schema: DISCOVERY_SCHEMA })
+    const handled = await tryAgent(discoveryPrompt(m, report.discoveries), { label: `発見還流:${m.id}`, phase: `${m.id} 還流`, model: 'sonnet', schema: DISCOVERY_SCHEMA })
     if (!handled) {
       // 還流係無応答 — 発見を失わないため記録だけ行い、安全側で全件 spec_impact 扱いにして裁定に回す
       specImpacts = report.discoveries.map(d => ({ ...d, milestone: m.id, impact: 'spec_impact', reason: '還流係無応答 — 安全側で裁定に回す' }))
@@ -382,7 +394,7 @@ for (const m of remaining) {
   }
 
   // 5. 進捗の永続化 — 途中クラッシュで完了済みマイルストーンが失われないよう都度記録する
-  await agent(statePrompt(m.id), { label: `state更新:${m.id}`, phase: `${m.id} 完了`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA })
+  await tryAgent(statePrompt(m.id), { label: `state更新:${m.id}`, phase: `${m.id} 完了`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA })
   completed.push(m.id)
   log(`${m.id} 完了: ゲート緑（修正 ${fixRounds} 回）/ 発見 ${report.discoveries.length} 件`)
 }

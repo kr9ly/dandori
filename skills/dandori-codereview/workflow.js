@@ -69,6 +69,11 @@ const WORK_ROOT = A.workRoot ? A.workRoot.replace(/\/+$/, '') : null
 if (WORK_ROOT && !SPEC_DIR.startsWith('/')) {
   throw new Error(`workRoot 指定時は specDir を絶対パスで渡すこと（現在: ${SPEC_DIR}）— 台帳・spec の書き先が worktree 内に複製されるのを防ぐため`)
 }
+// resources も同型 — 相対パスは「cd workRoot して作業する」エージェントから解決できず、
+// 周辺整合レーンの規約照合が黙って欠落する（workRoot 注入不足の同型・2026-07-23 実戦観測）
+if (WORK_ROOT && RESOURCES && !RESOURCES.startsWith('/')) {
+  throw new Error(`workRoot 指定時は resources も絶対パスで渡すこと（現在: ${RESOURCES}）`)
+}
 const workRootNote = WORK_ROOT
   ? `
 
@@ -80,6 +85,18 @@ const workRootNote = WORK_ROOT
   ${SPEC_DIR} （絶対パス）だけが正。読み書きは必ずこのパスで行い、${WORK_ROOT} 内に
   .dandori や台帳の複製を作らないこと`
   : ''
+
+// agent() は無応答（ユーザー skip / 終端 API エラー）では null を返すが、StructuredOutput の
+// リトライ上限（5 回）超過などでは reject する — throw を伝播させると workflow 全体が failed になり、
+// ディスク上の台帳・state が正しくても部分成功ごと失われる（2026-07-23 実戦観測・529 死亡とは別原因）。
+// throw は null に縮退させ、既存の無応答パス（安全側の分岐 + 新規実行での再開）へ合流させる
+const tryAgent = (prompt, opts) => agent(prompt, opts).then(
+  (r) => r,
+  (e) => {
+    log(`エージェント失敗（${(opts && opts.label) || '?'}）: ${(e && e.message) || e} — 無応答（null）として縮退`)
+    return null
+  },
+)
 
 // ---- schemas ---------------------------------------------------------------
 
@@ -291,11 +308,24 @@ ${COMMON_RULES}`,
   },
 }
 
+// 台帳の処置セルは checker（check-docs ledger の L1）が語彙検査する — 語彙外の言い換えや
+// 処置セルへの注記併記は escalated を誘発する（2026-07-23 実戦観測）。台帳を書く全プロンプトに注入する
+const LEDGER_VOCAB = `台帳の処置セルに書いてよいのは「反映済 / 却下 / 保留 / 反証破棄 / 再燃→<ID>」（または空 = 未処置）のみ。
+「対応済」「修正済」等の言い換えや、処置セルへの注記・裁定文の併記は語彙エラーになる —
+裁定・補足の文章は根拠・理由セルに書くこと。`
+
+// この実行で発番済みの最大 C 番号 — ラウンド間の再採番衝突（Rd2 の記録係が台帳の読み取りを
+// 誤って C-1 から再開し、Rd1 と ID が重複する — 2026-07-23 実戦観測）を決定的に防ぐフロア。
+// 実行を跨ぐ分は記録係の台帳走査と check-docs L4（ID 重複検出）がカバーする
+let cMaxIssued = 0
+
 const scribePrompt = (majors, round) => `あなたは指摘台帳の記録係です。台帳: ${LEDGER}（存在しなければヘッダ行から新規作成する）。
 正準形式: | ID | Rd | 深刻度 | 論点（一行） | 処置 | 根拠・理由 |
 
 以下の新規指摘を台帳に追記してください。今ラウンドは Rd=${round}、ID は C-n 系列の連番
-（既存の最大 C 番号の続き。R-n 系列とは独立）。
+（**台帳全体**の既存の最大 C 番号の続き。ラウンドが変わっても C-1 から再採番しない —
+追記前に台帳の全 C 行を走査して最大番号を確認すること。R-n 系列とは独立）。${cMaxIssued > 0 ? `
+この実行では C-${cMaxIssued} まで発番済み — 新規行は C-${cMaxIssued + 1} 以降を使うこと。` : ''}
 
 指摘（JSON）:
 ${JSON.stringify(majors.map((f, index) => ({ index, severity: f.severity, title: f.title, detail: f.detail, evidence: f.evidence })), null, 2)}
@@ -308,7 +338,8 @@ ${JSON.stringify(majors.map((f, index) => ({ index, severity: f.severity, title:
    - 一致する既存行なし → 新規行を追加。disposition=new
 2. 追加する行の論点セルは title を一行で、処置セルは空、根拠・理由セルは evidence を書く
 
-台帳は追記のみ。既存行の書き換え・削除は禁止。`
+台帳は追記のみ。既存行の書き換え・削除は禁止。
+${LEDGER_VOCAB}`
 
 const refutePrompt = (f) => `以下のコードレビュー指摘を反証してください。指摘は recall 優先の発見係によるもので、
 偽陽性を多く含む前提です — この反証が唯一の精度ゲートです。指摘が誤りである可能性 —
@@ -332,7 +363,8 @@ ${JSON.stringify(verdicts.map(v => ({ id: v.id, refuted: v.refuted, basis: v.bas
 
 - refuted=true → 処置を「反証破棄」にし、根拠・理由セルを反証根拠（basis）で置き換える
 - refuted=false かつ rekindleOf あり → 処置を「再燃→<rekindleOf>」にする
-- refuted=false かつ rekindleOf なし → 何もしない（処置は修正フェーズで記録される）`
+- refuted=false かつ rekindleOf なし → 何もしない（処置は修正フェーズで記録される）
+${LEDGER_VOCAB}`
 
 const fixPrompt = (survivors) => `あなたは dandori-impl の修正ループ（単発）を実行する実装エージェントです。
 コードレビューの反証フェーズを生き残った以下の指摘を修正してください。
@@ -353,7 +385,8 @@ ${JSON.stringify(survivors.map(s => ({ id: s.id, severity: s.severity, lane: s.l
   異常を検出して処理を継続する分岐は、その振る舞いを規定する B 行がある場合に限り書いてよい
 - lane=mutation の指摘（生存ミュータント）はテスト追加で殺すこと
 - 作成・変更するテストの名前（test タイトルまたは describe）に、検証対象の B 行 ID を含めること
-- 修正した指摘は台帳の該当行（ID で特定）の処置列を「反映済」にし、根拠・理由セルに対応を一行で記録すること
+- 修正した指摘は台帳の該当行（ID で特定）の処置列を「反映済」にし、根拠・理由セルに対応を一行で記録すること。
+  ${LEDGER_VOCAB}
 - 完了時に以下のゲートを自分で実行し、緑になるまで修正すること。生の出力の要点を gate_output で報告すること:
 ${GATES.map(g => `  - ${g}`).join('\n')}${workRootNote}`
 
@@ -419,13 +452,19 @@ async function processFindings(laneKey, findings, round, label) {
   if (majors.length === 0) return []
 
   const scribe = await serializedLedger(() =>
-    agent(scribePrompt(majors, round), {
+    tryAgent(scribePrompt(majors, round), {
       label: `台帳:${laneKey}`, phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: SCRIBE_SCHEMA,
     }))
   if (!scribe) {
     // 記録係が無応答でも指摘は消さない — 台帳行なし（id null）のまま反証に回す
     log(`${label}: 台帳記録係が無応答 — 指摘 ${majors.length} 件を台帳行なしで反証に回す`)
     return refuteAll(majors.map((f, i) => ({ ...f, id: `C-?(${laneKey}:${i})`, rekindleOf: null })), round)
+  }
+
+  // 発番フロアの更新 — 後続ラウンドの scribePrompt に「C-n まで発番済み」を注入する材料
+  for (const e of scribe.entries) {
+    const idm = e.id && String(e.id).match(/^C-(\d+)$/)
+    if (idm) cMaxIssued = Math.max(cMaxIssued, Number(idm[1]))
   }
 
   const toRefute = []
@@ -447,7 +486,7 @@ async function processFindings(laneKey, findings, round, label) {
 // blocker/major が黙って消えるのが最悪の失敗モード
 async function refuteAll(toRefute, round) {
   const verdicts = await parallel(toRefute.map(f => () =>
-    agent(refutePrompt(f), { label: `反証:${f.id}`, phase: `Rd${round} 反証`, model: 'sonnet', schema: VERDICT_SCHEMA })
+    tryAgent(refutePrompt(f), { label: `反証:${f.id}`, phase: `Rd${round} 反証`, model: 'sonnet', schema: VERDICT_SCHEMA })
       .then(v => (v
         ? { ...f, refuted: v.refuted, basis: v.basis }
         : { ...f, refuted: false, basis: '反証エージェント無応答 — 安全側で生存扱い' }))))
@@ -455,7 +494,7 @@ async function refuteAll(toRefute, round) {
 }
 
 async function runLane(laneKey, prompt, round, label) {
-  const r = await agent(prompt, { label, phase: `Rd${round} レビュー`, model: 'sonnet', schema: FINDINGS_SCHEMA })
+  const r = await tryAgent(prompt, { label, phase: `Rd${round} レビュー`, model: 'sonnet', schema: FINDINGS_SCHEMA })
   if (!r) return []
   if (r.error) {
     log(`${label}: 実行失敗 — ${r.error}`)
@@ -467,7 +506,7 @@ async function runLane(laneKey, prompt, round, label) {
 // ---- メインループ -------------------------------------------------------------
 
 log(`入口検査: ゲート再実行（${GATES.length} 本）+ 台帳の現在ラウンド確認`)
-const setup = await agent(setupPrompt, { label: '入口検査', phase: '入口検査', model: 'sonnet', schema: SETUP_SCHEMA })
+const setup = await tryAgent(setupPrompt, { label: '入口検査', phase: '入口検査', model: 'sonnet', schema: SETUP_SCHEMA })
 if (!setup) throw new Error('入口検査エージェントが結果を返さなかった')
 if (!setup.files_ok) {
   return { status: 'blocked', reason: `ファイル欠落: ${setup.missing || '不明'}`, ledger: LEDGER }
@@ -491,7 +530,7 @@ while (true) {
   let mutationFindings = []
   if (MUTATION && round === startRound) {
     log('機械検査先行: ミューテーションテスト（diff スコープ限定）')
-    const m = await agent(mutationPrompt, { label: 'ミューテーション', phase: `Rd${round} 機械検査`, model: 'sonnet', schema: FINDINGS_SCHEMA })
+    const m = await tryAgent(mutationPrompt, { label: 'ミューテーション', phase: `Rd${round} 機械検査`, model: 'sonnet', schema: FINDINGS_SCHEMA })
     if (!m) log('ミューテーションエージェント無応答 — スキップして続行')
     else if (m.error) log(`ミューテーション実行失敗 — ${m.error}（スキップして続行）`)
     else mutationFindings = m.findings
@@ -512,11 +551,11 @@ while (true) {
     // 数えられ、判定が汚染される（review 側の実戦観測と同型）。ACK を検査し、失敗は
     // 1 回だけ再試行、それでも書けなければ明示的に escalate する
     let ack = await serializedLedger(() =>
-      agent(verdictScribePrompt(verdicts), { label: '台帳:反証結果', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA }))
+      tryAgent(verdictScribePrompt(verdicts), { label: '台帳:反証結果', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA }))
     if (!ack || !ack.done) {
       log('反証結果の台帳記入が未完了 — 1 回だけ再試行')
       ack = await serializedLedger(() =>
-        agent(verdictScribePrompt(verdicts), { label: '台帳:反証結果(再試行)', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA }))
+        tryAgent(verdictScribePrompt(verdicts), { label: '台帳:反証結果(再試行)', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA }))
     }
     if (!ack || !ack.done) {
       return {
@@ -539,7 +578,7 @@ while (true) {
       // ないと check-docs は最後の行があるラウンドまでしか観測できず、過去の停滞パターン
       // から escalated を返し続ける。「指摘なし」マーカーの追記は check-docs の
       // --mark-zero-round に委ねる（決定的・冪等 — 収束判定と同一コマンドで済む）
-      judge = await agent(judgePrompt(verdicts.length === 0 ? round : null), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
+      judge = await tryAgent(judgePrompt(verdicts.length === 0 ? round : null), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
     }
     // 完了条件は check-docs の exit 0（形式不備なし）まで含む — 未処置行や欠番を残して
     // passed を名乗らない
@@ -558,7 +597,7 @@ while (true) {
     }
   }
 
-  const fix = await agent(fixPrompt(survivors), { label: '修正', phase: `Rd${round} 修正`, schema: FIX_SCHEMA })
+  const fix = await tryAgent(fixPrompt(survivors), { label: '修正', phase: `Rd${round} 修正`, schema: FIX_SCHEMA })
   if (!fix) {
     return { status: 'gate_red', reason: '修正エージェントが結果を返さなかった', survivors, minors, lastRound: round, ledger: LEDGER }
   }
@@ -583,7 +622,7 @@ while (true) {
     log(`修正エージェントの報告から漏れた指摘: ${unhandled.map(s => s.id).join(', ')} — 台帳の未処置行として収束判定が検出する`)
   }
 
-  const judge = await agent(judgePrompt(null), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
+  const judge = await tryAgent(judgePrompt(null), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
   if (judgeVerdict(judge) === 'escalated') {
     return { status: 'escalated', judgeNotes: judge.notes || '', minors, lastRound: round, rounds: round - startRound + 1, ledger: LEDGER }
   }

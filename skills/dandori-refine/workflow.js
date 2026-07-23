@@ -62,6 +62,18 @@ const workRootNote = WORK_ROOT
 - このディレクトリ外のコード（他の worktree・リポジトリ）を変更しないこと`
   : ''
 
+// agent() は無応答（ユーザー skip / 終端 API エラー）では null を返すが、StructuredOutput の
+// リトライ上限（5 回）超過などでは reject する — throw を伝播させると workflow 全体が failed になり、
+// ディスク上の台帳・state が正しくても部分成功ごと失われる（2026-07-23 実戦観測・529 死亡とは別原因）。
+// throw は null に縮退させ、既存の無応答パス（安全側の分岐 + 新規実行での再開）へ合流させる
+const tryAgent = (prompt, opts) => agent(prompt, opts).then(
+  (r) => r,
+  (e) => {
+    log(`エージェント失敗（${(opts && opts.label) || '?'}）: ${(e && e.message) || e} — 無応答（null）として縮退`)
+    return null
+  },
+)
+
 // ---- schemas ---------------------------------------------------------------
 
 const PROPOSALS_SCHEMA = {
@@ -232,7 +244,7 @@ ${GATES.map(g => `  - ${g}`).join('\n')}
 // 1. 機械検査を先に — formatter が直せるものにレビューレーンを使わない
 if (MECH.length > 0) {
   log(`機械検査先行: formatter / linter（${MECH.length} 本）`)
-  const mech = await agent(mechPrompt, { label: '機械検査', phase: '機械検査', model: 'sonnet', effort: 'low', schema: MECH_SCHEMA })
+  const mech = await tryAgent(mechPrompt, { label: '機械検査', phase: '機械検査', model: 'sonnet', effort: 'low', schema: MECH_SCHEMA })
   log(mech ? `機械検査: ${mech.summary}` : '機械検査エージェント無応答 — スキップして続行')
 } else {
   log('機械検査: 正準コマンド未宣言のためスキップ（導入提案は dandori-doctor の管轄）')
@@ -243,7 +255,7 @@ if (MECH.length > 0) {
 //    ゲートが赤いまま適用に進むと、適用エージェントが存在しない原因を revert で探し始める
 const laneKeys = Object.keys(LANES)
 const entryGateThunk = async () => {
-  const g = await agent(
+  const g = await tryAgent(
     `次のゲートコマンドを順に実行し、すべて緑か確認してください。コードの修正はしないこと。
 赤があれば gate_output に生の出力の要点を入れること:
 ${GATES.map(c => `- ${c}`).join('\n')}${workRootNote}`,
@@ -256,11 +268,11 @@ ${GATES.map(c => `- ${c}`).join('\n')}${workRootNote}`,
 
 const laneThunks = laneKeys.map(key => async () => {
   const lane = LANES[key]
-  const r = await agent(lane.prompt, { label: `レーン:${lane.label}`, phase: 'レビュー', model: 'sonnet', schema: PROPOSALS_SCHEMA })
+  const r = await tryAgent(lane.prompt, { label: `レーン:${lane.label}`, phase: 'レビュー', model: 'sonnet', schema: PROPOSALS_SCHEMA })
   if (!r || r.proposals.length === 0) return { accepted: [], rejected: [] }
   const tagged = r.proposals.map(p => ({ ...p, lane: key }))
 
-  const f = await agent(filterPrompt(tagged), { label: `採否:${lane.label}`, phase: '採否フィルタ', model: 'sonnet', effort: 'low', schema: FILTER_SCHEMA })
+  const f = await tryAgent(filterPrompt(tagged), { label: `採否:${lane.label}`, phase: '採否フィルタ', model: 'sonnet', effort: 'low', schema: FILTER_SCHEMA })
   if (!f) {
     // フィルタ無応答なら保守側に倒す — 全棄却（誤適用より取りこぼしが安い工程）
     return { accepted: [], rejected: tagged.map(p => ({ ...p, reason: '採否フィルタ無応答 — 保守側で棄却' })) }
@@ -311,7 +323,7 @@ if (accepted.length === 0) {
   return { status: 'done', applied: [], rejected, behaviorChanges, note: '採用ゼロ — working tree 無変更、ゲートは codereview 通過時の緑のまま' }
 }
 
-const apply = await agent(applyPrompt(accepted), { label: '適用', phase: '適用 + ゲート', schema: APPLY_SCHEMA })
+const apply = await tryAgent(applyPrompt(accepted), { label: '適用', phase: '適用 + ゲート', schema: APPLY_SCHEMA })
 if (!apply) {
   return { status: 'gate_red', reason: '適用エージェントが結果を返さなかった — working tree の状態をメインで確認すること', accepted, rejected, behaviorChanges }
 }
