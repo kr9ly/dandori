@@ -29,6 +29,9 @@ export const meta = {
 //   resources       (任意) .dandori/resources.md のパス（周辺整合レーンの規約参照用）
 //   mutationCommand (任意) diff スコープ限定のミューテーションテストコマンド
 //   maxRounds       (任意) ラウンド数の暴走バックストップ（既定 6）
+//   models          (任意) 役割別のモデル上書き（例: {"refute":"opus","finder":"opus"}）。
+//                   役割語彙は下の role() 参照。未指定なら各呼び出し点の既定値
+//   efforts         (任意) 役割別の reasoning effort 上書き（low|medium|high|xhigh|max）
 //   workRoot        (任意) コードの作業ルート（worktree 並列レーン等、コードがセッションの
 //                   作業ディレクトリと別の場所にあるとき指定）。レビュー・反証・修正・入口検査の
 //                   プロンプトに決定的に注入され、コードの読み書きとゲート実行をこの中に閉じ込める
@@ -47,7 +50,7 @@ export const meta = {
 const A = typeof args === 'string' ? JSON.parse(args) : args
 
 if (!A || !A.specDir || !A.diffCommand || !Array.isArray(A.gates) || A.gates.length === 0 || !A.checkDocs) {
-  throw new Error('args に specDir / diffCommand / gates（配列） / checkDocs が必要。任意: resources / mutationCommand / maxRounds / workRoot')
+  throw new Error('args に specDir / diffCommand / gates（配列） / checkDocs が必要。任意: resources / mutationCommand / maxRounds / workRoot / models / efforts')
 }
 
 // 型の明示検査 — 単一パス想定の args に配列を渡すと、後段のパス操作（startsWith 等）が
@@ -114,6 +117,38 @@ const tryAgent = (prompt, opts) => agent(prompt, opts).then(
     return null
   },
 )
+
+// ---- 役割別のモデル / effort -----------------------------------------------
+// 呼び出し点の base が既定（= 従来の固定値）。args.models / args.efforts で役割単位に
+// 上書きする。役割語彙（4 workflow 共通。この工程で登場しない役割もある）:
+//   finder — レビューレーン（recall 係）
+//   refute — 反証（精度ゲート。生き残った指摘だけが還流するため、ここが精度の上限を決める）
+//   fix    — 実装・修正・適用・反映（既定はモデル未指定 = メインからの継承）
+//   brief  — ブリーフ組み立て（マニフェスト記載セクションの抽出）
+//   triage — 採否・還流の判定
+//   scribe — 台帳・state への転記係（判断を持たない。逐語転記のみ）
+//   judge  — 収束判定（チェッカー出力の逐語転記）
+//   mech   — ゲート・機械検査の実行と結果報告
+// 値に null を渡すと未指定（メインからの継承）に落とせる。
+const ROLES = new Set(['finder', 'refute', 'fix', 'brief', 'triage', 'scribe', 'judge', 'mech'])
+const MODELS = A.models || {}
+const EFFORTS = A.efforts || {}
+for (const [key, table] of [['models', MODELS], ['efforts', EFFORTS]]) {
+  if (typeof table !== 'object' || Array.isArray(table)) {
+    throw new Error(`args.${key} は役割名をキーに持つオブジェクトで渡すこと（現在: ${JSON.stringify(table)}）`)
+  }
+  for (const name of Object.keys(table)) {
+    if (!ROLES.has(name)) {
+      throw new Error(`args.${key} の役割名 "${name}" は未知 — 使える役割は ${[...ROLES].join(' / ')}`)
+    }
+  }
+}
+const role = (name, base = {}) => {
+  const o = { ...base }
+  if (name in MODELS) { if (MODELS[name] === null) delete o.model; else o.model = MODELS[name] }
+  if (name in EFFORTS) { if (EFFORTS[name] === null) delete o.effort; else o.effort = EFFORTS[name] }
+  return o
+}
 
 // ---- schemas ---------------------------------------------------------------
 
@@ -511,7 +546,8 @@ async function processFindings(laneKey, findings, round, label) {
   // 照合 → 追記 の 2 段。照合はエージェント（同一論点の意味判断）、追記は決定的コマンド
   const matched = await serializedLedger(() =>
     tryAgent(matchPrompt(majors, round), {
-      label: `台帳照合:${laneKey}`, phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: MATCH_SCHEMA,
+      label: `台帳照合:${laneKey}`, phase: `Rd${round} 台帳`, schema: MATCH_SCHEMA,
+      ...role('scribe', { model: 'sonnet', effort: 'low' }),
     }))
   if (!matched) {
     // 照合係が無応答でも指摘は消さない — 全件を新規扱いで追記に回す（重複行は
@@ -547,7 +583,8 @@ async function processFindings(laneKey, findings, round, label) {
   }))
   const appended = await serializedLedger(() =>
     tryAgent(appendPrompt(rows, round), {
-      label: `台帳追記:${laneKey}`, phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: APPEND_SCHEMA,
+      label: `台帳追記:${laneKey}`, phase: `Rd${round} 台帳`, schema: APPEND_SCHEMA,
+      ...role('scribe', { model: 'sonnet', effort: 'low' }),
     }))
 
   // index → 発番された ID。追記コマンドの出力行が唯一の出所（推測しない）
@@ -574,7 +611,7 @@ async function processFindings(laneKey, findings, round, label) {
 // blocker/major が黙って消えるのが最悪の失敗モード
 async function refuteAll(toRefute, round) {
   const verdicts = await parallel(toRefute.map(f => () =>
-    tryAgent(refutePrompt(f), { label: `反証:${f.id}`, phase: `Rd${round} 反証`, model: 'sonnet', schema: VERDICT_SCHEMA })
+    tryAgent(refutePrompt(f), { label: `反証:${f.id}`, phase: `Rd${round} 反証`, schema: VERDICT_SCHEMA, ...role('refute', { model: 'sonnet' }) })
       .then(v => (v
         ? { ...f, refuted: v.refuted, basis: v.basis }
         : { ...f, refuted: false, basis: '反証エージェント無応答 — 安全側で生存扱い' }))))
@@ -582,7 +619,7 @@ async function refuteAll(toRefute, round) {
 }
 
 async function runLane(laneKey, prompt, round, label) {
-  const r = await tryAgent(prompt, { label, phase: `Rd${round} レビュー`, model: 'sonnet', schema: FINDINGS_SCHEMA })
+  const r = await tryAgent(prompt, { label, phase: `Rd${round} レビュー`, schema: FINDINGS_SCHEMA, ...role('finder', { model: 'sonnet' }) })
   if (!r) return []
   if (r.error) {
     log(`${label}: 実行失敗 — ${r.error}`)
@@ -594,7 +631,7 @@ async function runLane(laneKey, prompt, round, label) {
 // ---- メインループ -------------------------------------------------------------
 
 log(`入口検査: ゲート再実行（${GATES.length} 本）+ 台帳の現在ラウンド確認`)
-const setup = await tryAgent(setupPrompt, { label: '入口検査', phase: '入口検査', model: 'sonnet', schema: SETUP_SCHEMA })
+const setup = await tryAgent(setupPrompt, { label: '入口検査', phase: '入口検査', schema: SETUP_SCHEMA, ...role('mech', { model: 'sonnet' }) })
 if (!setup) throw new Error('入口検査エージェントが結果を返さなかった')
 if (!setup.files_ok) {
   return { status: 'blocked', reason: `ファイル欠落: ${setup.missing || '不明'}`, ledger: LEDGER }
@@ -618,7 +655,7 @@ while (true) {
   let mutationFindings = []
   if (MUTATION && round === startRound) {
     log('機械検査先行: ミューテーションテスト（diff スコープ限定）')
-    const m = await tryAgent(mutationPrompt, { label: 'ミューテーション', phase: `Rd${round} 機械検査`, model: 'sonnet', schema: FINDINGS_SCHEMA })
+    const m = await tryAgent(mutationPrompt, { label: 'ミューテーション', phase: `Rd${round} 機械検査`, schema: FINDINGS_SCHEMA, ...role('mech', { model: 'sonnet' }) })
     if (!m) log('ミューテーションエージェント無応答 — スキップして続行')
     else if (m.error) log(`ミューテーション実行失敗 — ${m.error}（スキップして続行）`)
     else mutationFindings = m.findings
@@ -639,11 +676,11 @@ while (true) {
     // 数えられ、判定が汚染される（review 側の実戦観測と同型）。ACK を検査し、失敗は
     // 1 回だけ再試行、それでも書けなければ明示的に escalate する
     let ack = await serializedLedger(() =>
-      tryAgent(verdictScribePrompt(verdicts), { label: '台帳:反証結果', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA }))
+      tryAgent(verdictScribePrompt(verdicts), { label: '台帳:反証結果', phase: `Rd${round} 台帳`, schema: ACK_SCHEMA, ...role('scribe', { model: 'sonnet', effort: 'low' }) }))
     if (!ack || !ack.done) {
       log('反証結果の台帳記入が未完了 — 1 回だけ再試行')
       ack = await serializedLedger(() =>
-        tryAgent(verdictScribePrompt(verdicts), { label: '台帳:反証結果(再試行)', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA }))
+        tryAgent(verdictScribePrompt(verdicts), { label: '台帳:反証結果(再試行)', phase: `Rd${round} 台帳`, schema: ACK_SCHEMA, ...role('scribe', { model: 'sonnet', effort: 'low' }) }))
     }
     if (!ack || !ack.done) {
       return {
@@ -666,7 +703,7 @@ while (true) {
       // ないと check-docs は最後の行があるラウンドまでしか観測できず、過去の停滞パターン
       // から escalated を返し続ける。「指摘なし」マーカーの追記は check-docs の
       // --mark-zero-round に委ねる（決定的・冪等 — 収束判定と同一コマンドで済む）
-      judge = await tryAgent(judgePrompt(verdicts.length === 0), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
+      judge = await tryAgent(judgePrompt(verdicts.length === 0), { label: '収束判定', phase: `Rd${round} 判定`, schema: JUDGE_SCHEMA, ...role('judge', { model: 'sonnet', effort: 'low' }) })
     }
     // 完了条件は check-docs の exit 0（形式不備なし）まで含む — 未処置行や欠番を残して
     // passed を名乗らない
@@ -685,7 +722,7 @@ while (true) {
     }
   }
 
-  const fix = await tryAgent(fixPrompt(survivors), { label: '修正', phase: `Rd${round} 修正`, schema: FIX_SCHEMA })
+  const fix = await tryAgent(fixPrompt(survivors), { label: '修正', phase: `Rd${round} 修正`, schema: FIX_SCHEMA, ...role('fix') })
   if (!fix) {
     return { status: 'gate_red', reason: '修正エージェントが結果を返さなかった', survivors, minors, lastRound: round, ledger: LEDGER }
   }
@@ -710,7 +747,7 @@ while (true) {
     log(`修正エージェントの報告から漏れた指摘: ${unhandled.map(s => s.id).join(', ')} — 台帳の未処置行として収束判定が検出する`)
   }
 
-  const judge = await tryAgent(judgePrompt(false), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
+  const judge = await tryAgent(judgePrompt(false), { label: '収束判定', phase: `Rd${round} 判定`, schema: JUDGE_SCHEMA, ...role('judge', { model: 'sonnet', effort: 'low' }) })
   if (judgeVerdict(judge) === 'escalated') {
     return { status: 'escalated', judgeNotes: judge.notes || '', minors, lastRound: round, rounds: round - startRound + 1, ledger: LEDGER }
   }

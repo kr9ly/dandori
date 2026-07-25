@@ -205,9 +205,14 @@ spec.md に状態モデル（`dandori-state-model` ブロック）がある場�
   `checkStateModel`（check-state-model.ts の実行プレフィックス — 状態モデルつき spec では
   **必ず渡す**。反映エージェントが反映後にチェッカーを exit 0 まで回すことを強制し、
   軸値未定義・Covers 未知値・単軸 dependent 等の形式エラーの持ち込みを工程内で検出する）/
-  `maxRounds` / `workRoot`。
+  `maxRounds` / `workRoot` / `models` / `efforts`。
   JSON オブジェクトで渡す（ハーネスによっては文字列で届くが、スクリプト側で JSON.parse に
   正規化される — 失敗時は `args に specDir / checkDocs が必要` エラー）
+- `models` / `efforts`: 役割別のモデル・reasoning effort の上書き（役割語彙は
+  finder / refute / fix / brief / triage / scribe / judge / mech の 8 語で 4 workflow 共通）。
+  この工程のレビューア（`finder`）と反映（`fix`）は既定でモデル未指定 = メインからの継承 —
+  仕様・設計の批評はこの工程の品質の源泉なので下げない。**反証（`refute`）の既定は Sonnet
+  なので、精度ゲートとしてはメイン相当への引き上げを検討する**（`{"models":{"refute":"opus"}}`）
 - `workRoot`: 検証対象コードの作業ルート。worktree 並列レーン等、コードがセッションの
   主作業ディレクトリと別の場所にあるとき指定する（サブエージェントは主作業ディレクトリで
   動くため、指定しないと相対パスの探索が空振りし、他 worktree のコードを検証対象と

@@ -257,6 +257,15 @@ done
 diff <(ls dandori/skills/) <(ls ~/.claude/skills/ | grep '^dandori')
 ```
 
+## チェッカーの自己テスト（開発者向け）
+
+チェッカーは全工程のゲートを握るため、誤検出がそのままプロセスの空転になる。
+CLI 境界（引数 → 終了コード + 指摘 ID + 機械可読行）に対する回帰テストを同梱している:
+
+```bash
+node --test tests/*.test.mjs
+```
+
 ## 使い方
 
 ```

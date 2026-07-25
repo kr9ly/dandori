@@ -134,8 +134,14 @@ design.md の seam エントリが指名する結線行（`結線: B-n`）を実
 利益は希釈防止の構造的な強制 — ブリーフ組み立て係（マニフェスト記載セクションだけを抽出）と
 実装エージェントを分離し、実装エージェントのプロンプトに spec/design のパスを存在させない。
 
-- args: `specDir`（specs/<feature> — plan.md / state.yaml もこの直下）、任意で `maxFixRounds` と
-  `workRoot`。JSON オブジェクトで渡す（文字列で届く環境でもスクリプト側で JSON.parse に正規化される）
+- args: `specDir`（specs/<feature> — plan.md / state.yaml もこの直下）、任意で `maxFixRounds` /
+  `workRoot` / `models` / `efforts`。JSON オブジェクトで渡す（文字列で届く環境でもスクリプト側で
+  JSON.parse に正規化される）
+- `models` / `efforts`: 役割別のモデル・reasoning effort の上書き（役割語彙は
+  finder / refute / fix / brief / triage / scribe / judge / mech の 8 語で 4 workflow 共通）。
+  実装・修正（`fix`）は既定でモデル未指定 = メインからの継承。ブリーフ組み立て（`brief`）と
+  発見還流（`triage`）は既定 Sonnet — マニフェスト外のセクションを混ぜる事故や、spec 波及の
+  見落としが出るプロジェクトでは引き上げる
 - `workRoot`: コードの作業ルート。worktree 並列レーン等、コードがセッションの主作業ディレクトリと
   別の場所にあるとき指定する。サブエージェントは主作業ディレクトリで動くため、指定しないと
   相対パスのゲートが失敗し、他 worktree を誤編集するリスクがある。指定すると実装・修正・検証

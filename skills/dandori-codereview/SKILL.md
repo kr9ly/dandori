@@ -49,7 +49,10 @@ assertion の強さ・境界の網羅そのものは機械検査の結果を正�
 ## 5レーン並列ディスパッチ
 
 観点 × 照合先で分割した5レーンを、それぞれ**独立のサブエージェント**として並列起動する。
-各レーンの問いが狭いため、モデルは実装エージェントと同等以下（Sonnet クラス）で足りる。
+各レーンの問いが狭いため、モデルは実装エージェントと同等以下（Sonnet クラス）で足りる —
+ただしこれは**レーン（recall 係）に限った話**で、反証フェーズには適用しない。生き残った
+指摘だけが還流する非対称な決着構造上、反証側の読解力がこの工程の精度上限を決めるため、
+反証はメインと同格のモデルを既定にする（workflow では `models.refute` で指定する）。
 
 レーンは**発見係（finder）**であり、精度の担保は反証フェーズ（verifier）に全委譲する。
 精度をレーンに求めると自己検閲が起き、反証フェーズが飢える
@@ -200,8 +203,14 @@ workflow は escalated と別の `max_rounds` で返す（混ぜると、収束�
 
 - args: `specDir`（specs/<feature>）/ `diffCommand` / `gates`（正準コマンド配列）/
   `checkDocs`（check-docs.ts の実行プレフィックス）、任意で `resources` / `mutationCommand` /
-  `maxRounds` / `workRoot`。JSON オブジェクトで渡す（文字列で届く環境でもスクリプト側で
-  JSON.parse に正規化される）
+  `maxRounds` / `workRoot` / `models` / `efforts`。JSON オブジェクトで渡す（文字列で届く環境でも
+  スクリプト側で JSON.parse に正規化される）
+- `models` / `efforts`: 役割別のモデル・reasoning effort の上書き（役割語彙は
+  finder / refute / fix / brief / triage / scribe / judge / mech の 8 語で 4 workflow 共通）。
+  **反証（`refute`）はメイン相当のモデルを渡すこと** — 既定値は Sonnet だが、これは
+  レーン（recall 係）に合わせた設定であり、精度ゲートである反証には弱い。
+  例: `{"models": {"refute": "opus"}}`。転記係（`scribe` / `judge`）は逐語転記しか
+  しないので上げても効かない
 - `workRoot`: コードの作業ルート。worktree 並列レーン等、コードがセッションの主作業ディレクトリと
   別の場所にあるとき指定する（サブエージェントは主作業ディレクトリで動くため、指定しないと
   相対パスのゲートが失敗し、他 worktree を誤読・誤編集するリスクがある）。レビュー・反証・修正・

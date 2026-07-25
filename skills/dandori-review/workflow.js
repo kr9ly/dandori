@@ -38,6 +38,8 @@ export const meta = {
 //               spec に dandori-state-model ブロックがある場合、反映エージェントに
 //               「反映後にチェッカーを exit 0 まで回す」を強制する — 反映が軸値未定義・
 //               Covers 未知値・単軸 dependent 等の形式エラーを持ち込むのを工程内で検出する
+//   models       (任意) 役割別のモデル上書き（例: {"refute":"opus"}）。役割語彙は role() 参照
+//   efforts      (任意) 役割別の reasoning effort 上書き（low|medium|high|xhigh|max）
 //   maxRounds   (任意) ラウンド数の暴走バックストップ（既定 8 — 通常は再燃 / 停滞の
 //               escalate が先に効く。件数による打ち切りはしない設計のため大きめ）
 //   workRoot    (任意) コードの作業ルート（worktree 並列レーン等、コードがセッションの
@@ -57,7 +59,7 @@ export const meta = {
 const A = typeof args === 'string' ? JSON.parse(args) : args
 
 if (!A || !A.specDir || !A.checkDocs) {
-  throw new Error('args に specDir / checkDocs が必要。任意: reviewDocs（パス配列） / maxRounds / workRoot')
+  throw new Error('args に specDir / checkDocs が必要。任意: reviewDocs（パス配列） / maxRounds / workRoot / models / efforts')
 }
 
 // 型の明示検査 — 単一パス想定の args に配列を渡すと、後段のパス操作（startsWith 等）が
@@ -129,6 +131,38 @@ const tryAgent = (prompt, opts) => agent(prompt, opts).then(
     return null
   },
 )
+
+// ---- 役割別のモデル / effort -----------------------------------------------
+// 呼び出し点の base が既定（= 従来の固定値）。args.models / args.efforts で役割単位に
+// 上書きする。役割語彙（4 workflow 共通。この工程で登場しない役割もある）:
+//   finder — レビューレーン（recall 係）
+//   refute — 反証（精度ゲート。生き残った指摘だけが還流するため、ここが精度の上限を決める）
+//   fix    — 実装・修正・適用・反映（既定はモデル未指定 = メインからの継承）
+//   brief  — ブリーフ組み立て（マニフェスト記載セクションの抽出）
+//   triage — 採否・還流の判定
+//   scribe — 台帳・state への転記係（判断を持たない。逐語転記のみ）
+//   judge  — 収束判定（チェッカー出力の逐語転記）
+//   mech   — ゲート・機械検査の実行と結果報告
+// 値に null を渡すと未指定（メインからの継承）に落とせる。
+const ROLES = new Set(['finder', 'refute', 'fix', 'brief', 'triage', 'scribe', 'judge', 'mech'])
+const MODELS = A.models || {}
+const EFFORTS = A.efforts || {}
+for (const [key, table] of [['models', MODELS], ['efforts', EFFORTS]]) {
+  if (typeof table !== 'object' || Array.isArray(table)) {
+    throw new Error(`args.${key} は役割名をキーに持つオブジェクトで渡すこと（現在: ${JSON.stringify(table)}）`)
+  }
+  for (const name of Object.keys(table)) {
+    if (!ROLES.has(name)) {
+      throw new Error(`args.${key} の役割名 "${name}" は未知 — 使える役割は ${[...ROLES].join(' / ')}`)
+    }
+  }
+}
+const role = (name, base = {}) => {
+  const o = { ...base }
+  if (name in MODELS) { if (MODELS[name] === null) delete o.model; else o.model = MODELS[name] }
+  if (name in EFFORTS) { if (EFFORTS[name] === null) delete o.effort; else o.effort = EFFORTS[name] }
+  return o
+}
 
 // ---- schemas ---------------------------------------------------------------
 
@@ -441,7 +475,7 @@ const setupPrompt = `dandori-review の入口確認を行ってください。�
 
 // ---- メインループ -------------------------------------------------------------
 
-const setup = await tryAgent(setupPrompt, { label: '入口確認', phase: '入口確認', model: 'sonnet', effort: 'low', schema: SETUP_SCHEMA })
+const setup = await tryAgent(setupPrompt, { label: '入口確認', phase: '入口確認', schema: SETUP_SCHEMA, ...role('mech', { model: 'sonnet', effort: 'low' }) })
 if (!setup) throw new Error('入口確認エージェントが結果を返さなかった')
 if (!setup.files_ok) {
   return { status: 'blocked', reason: `ファイル欠落: ${setup.missing || '不明'}`, ledger: LEDGER }
@@ -472,7 +506,8 @@ const addMinors = (findings, entries) => {
  */
 async function recordFindings(findings, round) {
   const matched = await tryAgent(matchPrompt(findings, round), {
-    label: '台帳照合', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: MATCH_SCHEMA,
+    label: '台帳照合', phase: `Rd${round} 台帳`, schema: MATCH_SCHEMA,
+    ...role('scribe', { model: 'sonnet', effort: 'low' }),
   })
   if (!matched) log(`台帳照合係が無応答 — 指摘 ${findings.length} 件を全件 new として追記に回す`)
   const entries = matched
@@ -503,7 +538,8 @@ async function recordFindings(findings, round) {
     reason: findings[e.index].evidence,
   }))
   const appended = await tryAgent(appendPrompt(rows, round), {
-    label: '台帳追記', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: APPEND_SCHEMA,
+    label: '台帳追記', phase: `Rd${round} 台帳`, schema: APPEND_SCHEMA,
+    ...role('scribe', { model: 'sonnet', effort: 'low' }),
   })
   if (appended && appended.exit_code === 0) {
     for (const line of appended.appended_lines || []) {
@@ -522,7 +558,7 @@ while (true) {
   // 1. 独立レビュー — レビューアのモデルはセッション継承（この工程の品質の源泉のため
   //    Sonnet に固定しない。codereview のレーンとは違い SKILL に「Sonnet で足りる」の宣言がない）
   const review = await tryAgent(reviewerPrompt(setup.has_state_model), {
-    label: `レビューア Rd${round}`, phase: `Rd${round} レビュー`, schema: FINDINGS_SCHEMA,
+    label: `レビューア Rd${round}`, phase: `Rd${round} レビュー`, schema: FINDINGS_SCHEMA, ...role('finder'),
   })
   if (!review) {
     return { status: 'escalated', reason: 'レビューアが結果を返さなかった — メインで再起動を判断', minors, lastRound: round, ledger: LEDGER }
@@ -547,7 +583,7 @@ while (true) {
       // ラウンドまでしか観測できず、過去の停滞パターンから escalated を返し続ける。
       // 「指摘なし」マーカーの追記は check-docs の --mark-zero-round に委ねる
       // （決定的・冪等 — 収束判定と同一コマンドで済む）
-      judge = await tryAgent(judgePrompt(findings.length === 0), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
+      judge = await tryAgent(judgePrompt(findings.length === 0), { label: '収束判定', phase: `Rd${round} 判定`, schema: JUDGE_SCHEMA, ...role('judge', { model: 'sonnet', effort: 'low' }) })
     }
     // 完了条件は check-docs の exit 0（形式不備なし）まで含む — 未処置行や欠番を残して
     // passed を名乗らない
@@ -584,7 +620,7 @@ while (true) {
   // 反証エージェントが無応答（skip / 終端エラー）の指摘は安全側で生存扱いにする —
   // blocker/major が黙って消えるのが最悪の失敗モード
   const verdicts = (await parallel(toRefute.map(f => () =>
-    tryAgent(refutePrompt(f), { label: `反証:${f.id}`, phase: `Rd${round} 反証`, model: 'sonnet', schema: VERDICT_SCHEMA })
+    tryAgent(refutePrompt(f), { label: `反証:${f.id}`, phase: `Rd${round} 反証`, schema: VERDICT_SCHEMA, ...role('refute', { model: 'sonnet' }) })
       .then(v => (v
         ? { ...f, refuted: v.refuted, basis: v.basis }
         : { ...f, refuted: false, basis: '反証エージェント無応答 — 安全側で生存扱い' }))))).filter(Boolean)
@@ -593,10 +629,10 @@ while (true) {
     // 反証結果の記入は収束判定の生命線 — 未記入のまま進むと反証破棄済みの行が生存として
     // 数えられ、judgeNotes と台帳の言い分が食い違ったまま判定が汚染される（実戦観測）。
     // ACK を検査し、失敗は 1 回だけ再試行、それでも書けなければ明示的に escalate する
-    let ack = await tryAgent(verdictScribePrompt(verdicts), { label: '台帳:反証結果', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA })
+    let ack = await tryAgent(verdictScribePrompt(verdicts), { label: '台帳:反証結果', phase: `Rd${round} 台帳`, schema: ACK_SCHEMA, ...role('scribe', { model: 'sonnet', effort: 'low' }) })
     if (!ack || !ack.done) {
       log('反証結果の台帳記入が未完了 — 1 回だけ再試行')
-      ack = await tryAgent(verdictScribePrompt(verdicts), { label: '台帳:反証結果(再試行)', phase: `Rd${round} 台帳`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA })
+      ack = await tryAgent(verdictScribePrompt(verdicts), { label: '台帳:反証結果(再試行)', phase: `Rd${round} 台帳`, schema: ACK_SCHEMA, ...role('scribe', { model: 'sonnet', effort: 'low' }) })
     }
     if (!ack || !ack.done) {
       return {
@@ -615,7 +651,7 @@ while (true) {
   const rekindledSurvivors = survivors.filter(v => v.rekindleOf)
   if (rekindledSurvivors.length > 0) {
     log(`再燃生存: ${rekindledSurvivors.map(v => v.rekindleOf).join(', ')} — 反映をスキップして収束判定へ`)
-    const judge = await tryAgent(judgePrompt(false), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
+    const judge = await tryAgent(judgePrompt(false), { label: '収束判定', phase: `Rd${round} 判定`, schema: JUDGE_SCHEMA, ...role('judge', { model: 'sonnet', effort: 'low' }) })
     return {
       status: 'escalated',
       reason: '既存論点が再指摘され反証も生き残った（再燃）— レビューアと処置の間で解釈が振動している',
@@ -631,7 +667,7 @@ while (true) {
   // 5. 生存ゼロ（全指摘が反証破棄）= 収束ラウンド — check-docs は反証破棄を生存数から
   //    除外するため、このラウンドの生存数は 0 として観測される
   if (survivors.length === 0) {
-    const judge = await tryAgent(judgePrompt(false), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
+    const judge = await tryAgent(judgePrompt(false), { label: '収束判定', phase: `Rd${round} 判定`, schema: JUDGE_SCHEMA, ...role('judge', { model: 'sonnet', effort: 'low' }) })
     const clean = !judge || (judgeVerdict(judge) !== 'escalated' && judge.exit_code === 0)
     return {
       status: clean ? 'passed' : 'escalated',
@@ -645,7 +681,7 @@ while (true) {
 
   // 6. 反証を生き残った blocker / major を反映（狭ブリーフのエージェント1枚 —
   //    会話にだけ存在する修正を作らない）
-  const reflect = await tryAgent(reflectPrompt(survivors, setup.has_state_model ? SM_CHECK : null), { label: `反映 Rd${round}`, phase: `Rd${round} 反映`, schema: REFLECT_SCHEMA })
+  const reflect = await tryAgent(reflectPrompt(survivors, setup.has_state_model ? SM_CHECK : null), { label: `反映 Rd${round}`, phase: `Rd${round} 反映`, schema: REFLECT_SCHEMA, ...role('fix') })
   if (!reflect) {
     return { status: 'escalated', reason: '反映エージェントが結果を返さなかった — ドキュメントの状態をメインで確認すること', minors, lastRound: round, ledger: LEDGER }
   }
@@ -667,7 +703,7 @@ while (true) {
   }
 
   // 4. 収束判定（形式検査込み）
-  const judge = await tryAgent(judgePrompt(false), { label: '収束判定', phase: `Rd${round} 判定`, model: 'sonnet', effort: 'low', schema: JUDGE_SCHEMA })
+  const judge = await tryAgent(judgePrompt(false), { label: '収束判定', phase: `Rd${round} 判定`, schema: JUDGE_SCHEMA, ...role('judge', { model: 'sonnet', effort: 'low' }) })
   if (judgeVerdict(judge) === 'escalated') {
     return { status: 'escalated', judgeNotes: judge.notes || '', minors, lastRound: round, rounds: round - startRound + 1, ledger: LEDGER }
   }

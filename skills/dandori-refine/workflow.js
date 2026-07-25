@@ -23,6 +23,8 @@ export const meta = {
 // args:
 //   diffCommand  (必須) レビュー対象差分の取得コマンド（codereview と同じ diff）
 //   gates        (必須) 正準ゲートコマンドの配列（適用後の再実行に使う）
+//   models       (任意) 役割別のモデル上書き（例: {"refute":"opus"}）。役割語彙は role() 参照
+//   efforts      (任意) 役割別の reasoning effort 上書き（low|medium|high|xhigh|max）
 //   mechCommands (任意) formatter / linter の正準コマンド配列（resources.md 記載のもの。
 //                なければ機械検査ステップをスキップ — この工程で導入作業はしない）
 //   resources    (任意) .dandori/resources.md のパス（提案の接地先として規約を参照させる）
@@ -41,7 +43,7 @@ export const meta = {
 const A = typeof args === 'string' ? JSON.parse(args) : args
 
 if (!A || !A.diffCommand || !Array.isArray(A.gates) || A.gates.length === 0) {
-  throw new Error('args に diffCommand / gates（配列）が必要。任意: mechCommands / resources / mapDir / workRoot')
+  throw new Error('args に diffCommand / gates（配列）が必要。任意: mechCommands / resources / mapDir / workRoot / models / efforts')
 }
 
 // 型の明示検査 — 単一パス・単一コマンド想定の args に配列を渡すと、後段の文字列操作が
@@ -94,6 +96,38 @@ const tryAgent = (prompt, opts) => agent(prompt, opts).then(
     return null
   },
 )
+
+// ---- 役割別のモデル / effort -----------------------------------------------
+// 呼び出し点の base が既定（= 従来の固定値）。args.models / args.efforts で役割単位に
+// 上書きする。役割語彙（4 workflow 共通。この工程で登場しない役割もある）:
+//   finder — レビューレーン（recall 係）
+//   refute — 反証（精度ゲート。生き残った指摘だけが還流するため、ここが精度の上限を決める）
+//   fix    — 実装・修正・適用・反映（既定はモデル未指定 = メインからの継承）
+//   brief  — ブリーフ組み立て（マニフェスト記載セクションの抽出）
+//   triage — 採否・還流の判定
+//   scribe — 台帳・state への転記係（判断を持たない。逐語転記のみ）
+//   judge  — 収束判定（チェッカー出力の逐語転記）
+//   mech   — ゲート・機械検査の実行と結果報告
+// 値に null を渡すと未指定（メインからの継承）に落とせる。
+const ROLES = new Set(['finder', 'refute', 'fix', 'brief', 'triage', 'scribe', 'judge', 'mech'])
+const MODELS = A.models || {}
+const EFFORTS = A.efforts || {}
+for (const [key, table] of [['models', MODELS], ['efforts', EFFORTS]]) {
+  if (typeof table !== 'object' || Array.isArray(table)) {
+    throw new Error(`args.${key} は役割名をキーに持つオブジェクトで渡すこと（現在: ${JSON.stringify(table)}）`)
+  }
+  for (const name of Object.keys(table)) {
+    if (!ROLES.has(name)) {
+      throw new Error(`args.${key} の役割名 "${name}" は未知 — 使える役割は ${[...ROLES].join(' / ')}`)
+    }
+  }
+}
+const role = (name, base = {}) => {
+  const o = { ...base }
+  if (name in MODELS) { if (MODELS[name] === null) delete o.model; else o.model = MODELS[name] }
+  if (name in EFFORTS) { if (EFFORTS[name] === null) delete o.effort; else o.effort = EFFORTS[name] }
+  return o
+}
 
 // ---- schemas ---------------------------------------------------------------
 
@@ -277,7 +311,7 @@ ${GATE_PROTOCOL}${workRootNote}`
 // 1. 機械検査を先に — formatter が直せるものにレビューレーンを使わない
 if (MECH.length > 0) {
   log(`機械検査先行: formatter / linter（${MECH.length} 本）`)
-  const mech = await tryAgent(mechPrompt, { label: '機械検査', phase: '機械検査', model: 'sonnet', effort: 'low', schema: MECH_SCHEMA })
+  const mech = await tryAgent(mechPrompt, { label: '機械検査', phase: '機械検査', schema: MECH_SCHEMA, ...role('mech', { model: 'sonnet', effort: 'low' }) })
   log(mech ? `機械検査: ${mech.summary}` : '機械検査エージェント無応答 — スキップして続行')
 } else {
   log('機械検査: 正準コマンド未宣言のためスキップ（導入提案は dandori-doctor の管轄）')
@@ -312,12 +346,14 @@ const entryGateThunk = async () => {
   // 未完走のまま赤を返された場合は 1 回だけ再実行する — 偽 blocked は「原因のない赤」を
   // 探す作業をユーザーに投げ、レビュー結果ごと捨てることになるため、赤の確定にコストをかける
   let g = await tryAgent(entryGatePrompt, {
-    label: '入口ゲート確認', phase: 'レビュー', model: 'sonnet', effort: 'low', schema: ENTRY_GATE_SCHEMA,
+    label: '入口ゲート確認', phase: 'レビュー', schema: ENTRY_GATE_SCHEMA,
+    ...role('mech', { model: 'sonnet', effort: 'low' }),
   })
   if (g && !g.verified) {
     log('入口ゲート: 完走を確認できていない報告（未完走・タイムアウト）— 1 回だけ再実行')
     g = await tryAgent(entryGatePrompt, {
-      label: '入口ゲート確認(再実行)', phase: 'レビュー', model: 'sonnet', effort: 'low', schema: ENTRY_GATE_SCHEMA,
+      label: '入口ゲート確認(再実行)', phase: 'レビュー', schema: ENTRY_GATE_SCHEMA,
+      ...role('mech', { model: 'sonnet', effort: 'low' }),
     })
   }
   return {
@@ -331,11 +367,11 @@ const entryGateThunk = async () => {
 
 const laneThunks = laneKeys.map(key => async () => {
   const lane = LANES[key]
-  const r = await tryAgent(lane.prompt, { label: `レーン:${lane.label}`, phase: 'レビュー', model: 'sonnet', schema: PROPOSALS_SCHEMA })
+  const r = await tryAgent(lane.prompt, { label: `レーン:${lane.label}`, phase: 'レビュー', schema: PROPOSALS_SCHEMA, ...role('finder', { model: 'sonnet' }) })
   if (!r || r.proposals.length === 0) return { accepted: [], rejected: [] }
   const tagged = r.proposals.map(p => ({ ...p, lane: key }))
 
-  const f = await tryAgent(filterPrompt(tagged), { label: `採否:${lane.label}`, phase: '採否フィルタ', model: 'sonnet', effort: 'low', schema: FILTER_SCHEMA })
+  const f = await tryAgent(filterPrompt(tagged), { label: `採否:${lane.label}`, phase: '採否フィルタ', schema: FILTER_SCHEMA, ...role('triage', { model: 'sonnet', effort: 'low' }) })
   if (!f) {
     // フィルタ無応答なら保守側に倒す — 全棄却（誤適用より取りこぼしが安い工程）
     return { accepted: [], rejected: tagged.map(p => ({ ...p, reason: '採否フィルタ無応答 — 保守側で棄却' })) }
@@ -386,7 +422,7 @@ if (accepted.length === 0) {
   return { status: 'done', applied: [], rejected, behaviorChanges, note: '採用ゼロ — working tree 無変更、ゲートは codereview 通過時の緑のまま' }
 }
 
-const apply = await tryAgent(applyPrompt(accepted), { label: '適用', phase: '適用 + ゲート', schema: APPLY_SCHEMA })
+const apply = await tryAgent(applyPrompt(accepted), { label: '適用', phase: '適用 + ゲート', schema: APPLY_SCHEMA, ...role('fix') })
 if (!apply) {
   return { status: 'gate_red', reason: '適用エージェントが結果を返さなかった — working tree の状態をメインで確認すること', accepted, rejected, behaviorChanges }
 }

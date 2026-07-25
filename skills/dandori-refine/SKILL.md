@@ -82,8 +82,12 @@ spec.md / design.md は**どのレーンにも渡さない** — この工程の
 （適用者が自分の仕事量を減らす方向にフィルタを甘くする利益相反を避ける）。
 
 - args: `diffCommand` / `gates`（正準コマンド配列）、任意で `mechCommands`（formatter/linter）/
-  `resources` / `mapDir` / `workRoot`。JSON オブジェクトで渡す（文字列で届く環境でもスクリプト側で
-  JSON.parse に正規化される）
+  `resources` / `mapDir` / `workRoot` / `models` / `efforts`。JSON オブジェクトで渡す（文字列で
+  届く環境でもスクリプト側で JSON.parse に正規化される）
+- `models` / `efforts`: 役割別のモデル・reasoning effort の上書き（役割語彙は
+  finder / refute / fix / brief / triage / scribe / judge / mech の 8 語で 4 workflow 共通）。
+  この工程には反証フェーズがないため上げる動機は薄い — レーン（`finder`）と採否（`triage`）は
+  既定 Sonnet、適用（`fix`）はメインからの継承
 - `gates` には**全量スイート**の正準コマンドを渡す（フィーチャースコープに絞らない）。
   この工程の適用は既存部品の再利用による import 追加を含み、影響がフィーチャー外に
   波及し得る（barrel 循環 import で無関係スイートが収集エラーになった実績あり）。

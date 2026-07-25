@@ -66,9 +66,11 @@
  *   （blocker/major の行を追記したラウンドでは不要）。マーカーの追記は
  *   --mark-zero-round <R|C> <rd|auto> で行う（決定的・冪等 — 検査・収束判定と同一コマンドで済む。
  *   エージェントによるマーカーの自由編集は監査改竄と誤検知されブロックされた実戦観測があり、
- *   このオプションが恒久対策 2026-07-21）。`auto` は台帳の実ラウンド番号（行 + 既存マーカーの
- *   最大 Rd）+1 を導出する — 呼び出し側のローカルなラウンド数え上げを渡すと既存 Rd 系列と
- *   食い違うマーカーが打たれ、収束済みなのに escalated になる（2026-07-25 実戦観測）。
+ *   このオプションが恒久対策 2026-07-21）。`auto` は台帳の実ラウンド番号から導出する —
+ *   行の最大 Rd + 1、ただし既存マーカーが行より先の Rd を主張しているならその Rd を再利用する
+ *   （ゼロラウンドは記録済み — 常に +1 する実装だと auto の再実行でラウンドが際限なく進む）。
+ *   呼び出し側のローカルなラウンド数え上げを渡すと既存 Rd 系列と食い違うマーカーが打たれ、
+ *   収束済みなのに escalated になる（2026-07-25 実戦観測）。
  *
  * ledger-append モード — 台帳への行追記（検査ではなく書き込み）:
  *   ID 発番・行の書式・処置と深刻度の語彙・書き先パスをスクリプト側で固定し、記録係
@@ -1032,7 +1034,7 @@ if (mode === 'ledger-append') {
       const idm = (cells[0] ?? '').match(/^([RCF])-(\d+)$/)
       if (!idm || idm[1] !== prefix) continue
       maxNum = Math.max(maxNum, Number(idm[2]))
-      byRdTopic.set(`${cells[1]} ${cells[3] ?? ''}`, cells[0])
+      byRdTopic.set(`${cells[1]}\x00${cells[3] ?? ''}`, cells[0])
     }
   }
 
@@ -1045,14 +1047,14 @@ if (mode === 'ledger-append') {
   for (const [i, r] of rowsInput.entries()) {
     const index = Number.isInteger(r.index) ? r.index! : i
     const topic = escapeCell(r.topic)
-    const dup = byRdTopic.get(`${rd} ${topic}`)
+    const dup = byRdTopic.get(`${rd}\x00${topic}`)
     if (dup !== undefined) {
       report.push(`[appended] index=${index} id=${dup} status=existing`)
       continue
     }
     const id = `${prefix}-${next++}`
     appendLines.push(`| ${id} | ${rd} | ${r.severity} | ${topic} | ${escapeCell(r.action ?? '')} | ${escapeCell(r.reason ?? '')} |`)
-    byRdTopic.set(`${rd} ${topic}`, id)
+    byRdTopic.set(`${rd}\x00${topic}`, id)
     report.push(`[appended] index=${index} id=${id} status=new`)
   }
 

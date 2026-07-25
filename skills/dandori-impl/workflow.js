@@ -23,6 +23,8 @@ export const meta = {
 // args:
 //   specDir      (必須) .dandori/specs/<feature> — spec.md / design.md / plan.md /
 //                state.yaml をこの直下に置く規約
+//   models       (任意) 役割別のモデル上書き（例: {"refute":"opus"}）。役割語彙は role() 参照
+//   efforts      (任意) 役割別の reasoning effort 上書き（low|medium|high|xhigh|max）
 //   maxFixRounds (任意) ゲート赤時の修正ディスパッチ回数の上限（既定 2）
 //   workRoot     (任意) コードの作業ルート（worktree 並列レーン等、コードがセッションの
 //                作業ディレクトリと別の場所にあるとき指定）。実装・修正・検証エージェントの
@@ -40,7 +42,7 @@ export const meta = {
 const A = typeof args === 'string' ? JSON.parse(args) : args
 
 if (!A || !A.specDir) {
-  throw new Error('args に specDir が必要。任意: maxFixRounds, workRoot')
+  throw new Error('args に specDir が必要。任意: maxFixRounds, workRoot, models, efforts')
 }
 
 // 型の明示検査 — 単一パス想定の args に配列を渡すと、後段のパス操作（startsWith 等）が
@@ -94,6 +96,38 @@ const tryAgent = (prompt, opts) => agent(prompt, opts).then(
     return null
   },
 )
+
+// ---- 役割別のモデル / effort -----------------------------------------------
+// 呼び出し点の base が既定（= 従来の固定値）。args.models / args.efforts で役割単位に
+// 上書きする。役割語彙（4 workflow 共通。この工程で登場しない役割もある）:
+//   finder — レビューレーン（recall 係）
+//   refute — 反証（精度ゲート。生き残った指摘だけが還流するため、ここが精度の上限を決める）
+//   fix    — 実装・修正・適用・反映（既定はモデル未指定 = メインからの継承）
+//   brief  — ブリーフ組み立て（マニフェスト記載セクションの抽出）
+//   triage — 採否・還流の判定
+//   scribe — 台帳・state への転記係（判断を持たない。逐語転記のみ）
+//   judge  — 収束判定（チェッカー出力の逐語転記）
+//   mech   — ゲート・機械検査の実行と結果報告
+// 値に null を渡すと未指定（メインからの継承）に落とせる。
+const ROLES = new Set(['finder', 'refute', 'fix', 'brief', 'triage', 'scribe', 'judge', 'mech'])
+const MODELS = A.models || {}
+const EFFORTS = A.efforts || {}
+for (const [key, table] of [['models', MODELS], ['efforts', EFFORTS]]) {
+  if (typeof table !== 'object' || Array.isArray(table)) {
+    throw new Error(`args.${key} は役割名をキーに持つオブジェクトで渡すこと（現在: ${JSON.stringify(table)}）`)
+  }
+  for (const name of Object.keys(table)) {
+    if (!ROLES.has(name)) {
+      throw new Error(`args.${key} の役割名 "${name}" は未知 — 使える役割は ${[...ROLES].join(' / ')}`)
+    }
+  }
+}
+const role = (name, base = {}) => {
+  const o = { ...base }
+  if (name in MODELS) { if (MODELS[name] === null) delete o.model; else o.model = MODELS[name] }
+  if (name in EFFORTS) { if (EFFORTS[name] === null) delete o.effort; else o.effort = EFFORTS[name] }
+  return o
+}
 
 // ---- schemas ---------------------------------------------------------------
 
@@ -313,13 +347,13 @@ ${JSON.stringify(discoveries.map(d => ({ what: d.what, mismatch: d.mismatch, res
 // 返し、メインに追記を委ねる
 async function recordDiscoveries(m, discoveries, phase) {
   if (discoveries.length === 0) return true
-  const ack = await tryAgent(recordPrompt(m, discoveries), { label: `発見記録:${m.id}`, phase, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA })
+  const ack = await tryAgent(recordPrompt(m, discoveries), { label: `発見記録:${m.id}`, phase, schema: ACK_SCHEMA, ...role('scribe', { model: 'sonnet', effort: 'low' }) })
   return Boolean(ack && ack.done)
 }
 
 // ---- メインループ（逐次 — 並列化はメインの領分）--------------------------------
 
-const setup = await tryAgent(setupPrompt, { label: '入口確認', phase: '入口確認', model: 'sonnet', effort: 'low', schema: SETUP_SCHEMA })
+const setup = await tryAgent(setupPrompt, { label: '入口確認', phase: '入口確認', schema: SETUP_SCHEMA, ...role('mech', { model: 'sonnet', effort: 'low' }) })
 if (!setup) throw new Error('入口確認エージェントが結果を返さなかった')
 if (!setup.files_ok) {
   return { status: 'blocked', reason: `plan.md / state.yaml の欠落・不整合: ${setup.missing || '不明'}` }
@@ -336,7 +370,7 @@ const allDiscoveries = []
 
 for (const m of remaining) {
   // 1. ブリーフ組み立て（抽出係 — マニフェスト記載セクションだけを取り出す）
-  const briefed = await tryAgent(briefPrompt(m), { label: `ブリーフ:${m.id}`, phase: `${m.id} ブリーフ`, model: 'sonnet', schema: BRIEF_SCHEMA })
+  const briefed = await tryAgent(briefPrompt(m), { label: `ブリーフ:${m.id}`, phase: `${m.id} ブリーフ`, schema: BRIEF_SCHEMA, ...role('brief', { model: 'sonnet' }) })
   if (!briefed) {
     return { status: 'blocked', reason: `${m.id}: ブリーフ組み立て係が結果を返さなかった`, completed, discoveries: allDiscoveries }
   }
@@ -346,7 +380,7 @@ for (const m of remaining) {
 
   // 2. 実装ディスパッチ（モデルはセッション継承 — 実装は能力が要る）。
   //    プロンプトに spec/design のパスを渡さない = 全文を読ませない（希釈防止）
-  let report = await tryAgent(implPrompt(m, briefed.brief, briefed.gates), { label: `実装:${m.id}`, phase: `${m.id} 実装`, schema: IMPL_SCHEMA })
+  let report = await tryAgent(implPrompt(m, briefed.brief, briefed.gates), { label: `実装:${m.id}`, phase: `${m.id} 実装`, schema: IMPL_SCHEMA, ...role('fix') })
   if (!report) {
     return { status: 'gate_red', reason: `${m.id}: 実装エージェントが結果を返さなかった — working tree の状態をメインで確認すること`, completed, discoveries: allDiscoveries }
   }
@@ -359,10 +393,10 @@ for (const m of remaining) {
   // 3. ゲート検証 — 実装エージェントの「通りました」を信用せず独立に再実行。
   //    未完走のまま赤が返った場合は 1 回だけ再実行する（偽の赤は不要な修正ディスパッチを起動する）
   const verifyGates = async (label) => {
-    let v = await tryAgent(verifyPrompt(briefed.gates), { label, phase: `${m.id} 検証`, model: 'sonnet', effort: 'low', schema: VERIFY_SCHEMA })
+    let v = await tryAgent(verifyPrompt(briefed.gates), { label, phase: `${m.id} 検証`, schema: VERIFY_SCHEMA, ...role('mech', { model: 'sonnet', effort: 'low' }) })
     if (v && !v.verified) {
       log(`${m.id}: ゲートの完走を確認できていない報告（未完走・タイムアウト）— 1 回だけ再実行`)
-      v = await tryAgent(verifyPrompt(briefed.gates), { label: `${label}(再実行)`, phase: `${m.id} 検証`, model: 'sonnet', effort: 'low', schema: VERIFY_SCHEMA })
+      v = await tryAgent(verifyPrompt(briefed.gates), { label: `${label}(再実行)`, phase: `${m.id} 検証`, schema: VERIFY_SCHEMA, ...role('mech', { model: 'sonnet', effort: 'low' }) })
     }
     if (v && !v.verified) {
       return { ...v, green: false, gate_output: `${v.gate_output || ''}\n（完走を確認できないままの報告 — ゲートの実行環境かタイムアウトを疑う）` }
@@ -374,7 +408,7 @@ for (const m of remaining) {
   while ((!verified || !verified.green) && fixRounds < MAX_FIX_ROUNDS) {
     fixRounds += 1
     log(`${m.id}: ゲート赤 — 修正ディスパッチ ${fixRounds}/${MAX_FIX_ROUNDS}`)
-    const fix = await tryAgent(fixPrompt(m, briefed.brief, briefed.gates, verified ? verified.gate_output : '検証エージェント無応答'), { label: `修正:${m.id}#${fixRounds}`, phase: `${m.id} 実装`, schema: IMPL_SCHEMA })
+    const fix = await tryAgent(fixPrompt(m, briefed.brief, briefed.gates, verified ? verified.gate_output : '検証エージェント無応答'), { label: `修正:${m.id}#${fixRounds}`, phase: `${m.id} 実装`, schema: IMPL_SCHEMA, ...role('fix') })
     if (!fix) break
     if (fix.halted) {
       const pending = [...report.discoveries, ...fix.discoveries].map(d => ({ ...d, milestone: m.id }))
@@ -400,7 +434,7 @@ for (const m of remaining) {
   // 4. [発見] の還流 — design.md 発見ログへの追記（全件）+ 影響分類
   let specImpacts = []
   if (report.discoveries.length > 0) {
-    const handled = await tryAgent(discoveryPrompt(m, report.discoveries), { label: `発見還流:${m.id}`, phase: `${m.id} 還流`, model: 'sonnet', schema: DISCOVERY_SCHEMA })
+    const handled = await tryAgent(discoveryPrompt(m, report.discoveries), { label: `発見還流:${m.id}`, phase: `${m.id} 還流`, schema: DISCOVERY_SCHEMA, ...role('triage', { model: 'sonnet' }) })
     if (!handled) {
       // 還流係無応答 — 発見を失わないため記録だけ行い、安全側で全件 spec_impact 扱いにして裁定に回す
       specImpacts = report.discoveries.map(d => ({ ...d, milestone: m.id, impact: 'spec_impact', reason: '還流係無応答 — 安全側で裁定に回す' }))
@@ -435,7 +469,7 @@ for (const m of remaining) {
   }
 
   // 5. 進捗の永続化 — 途中クラッシュで完了済みマイルストーンが失われないよう都度記録する
-  await tryAgent(statePrompt(m.id), { label: `state更新:${m.id}`, phase: `${m.id} 完了`, model: 'sonnet', effort: 'low', schema: ACK_SCHEMA })
+  await tryAgent(statePrompt(m.id), { label: `state更新:${m.id}`, phase: `${m.id} 完了`, schema: ACK_SCHEMA, ...role('scribe', { model: 'sonnet', effort: 'low' }) })
   completed.push(m.id)
   log(`${m.id} 完了: ゲート緑（修正 ${fixRounds} 回）/ 発見 ${report.discoveries.length} 件`)
 }
