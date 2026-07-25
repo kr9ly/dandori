@@ -44,6 +44,27 @@ if (!A || !A.diffCommand || !Array.isArray(A.gates) || A.gates.length === 0) {
   throw new Error('args に diffCommand / gates（配列）が必要。任意: mechCommands / resources / mapDir / workRoot')
 }
 
+// 型の明示検査 — 単一パス・単一コマンド想定の args に配列を渡すと、後段の文字列操作が
+// 「... is not a function」で即死し、期待形が読み取れないまま workflow が落ちる
+// （2026-07-25 実戦観測: codereview の resources に配列を渡して絶対パスガードがクラッシュ）
+const requireStr = (name, v) => {
+  if (typeof v !== 'string' || v.trim() === '') {
+    throw new Error(`args.${name} は空でない文字列で渡すこと（現在: ${JSON.stringify(v)}）`)
+  }
+  return v
+}
+requireStr('diffCommand', A.diffCommand)
+for (const name of ['resources', 'mapDir', 'workRoot']) {
+  if (A[name] !== undefined && A[name] !== null) requireStr(name, A[name])
+}
+A.gates.forEach((g, i) => requireStr(`gates[${i}]`, g))
+if (A.mechCommands !== undefined && A.mechCommands !== null) {
+  if (!Array.isArray(A.mechCommands)) {
+    throw new Error(`args.mechCommands はコマンドの配列で渡すこと（現在: ${JSON.stringify(A.mechCommands)}）`)
+  }
+  A.mechCommands.forEach((c, i) => requireStr(`mechCommands[${i}]`, c))
+}
+
 const DIFF_CMD = A.diffCommand
 const GATES = A.gates
 const MECH = Array.isArray(A.mechCommands) ? A.mechCommands : []
@@ -165,6 +186,16 @@ const COMMON_RULES = `ルール:
 - 各提案に、対象箇所（ファイル:行）と具体的な変更内容を付けること
 - 修正は行わない。提案の列挙だけを返すこと`
 
+// ゲート実行の規約 — 「起動した」と「完走を見た」を分ける。入口ゲート確認エージェントが
+// 全量テスト（数分）の完了を待たず green=false を返し、原因のない偽 blocked になった
+// （2026-07-25 実戦観測）。完走した exit code だけを判定根拠にさせる
+const GATE_PROTOCOL = `ゲート実行の規約:
+- 各コマンドは前景で実行し、**プロセスの終了と exit code を確認するまで判定しない**。
+  バックグラウンド実行（\`&\` / run_in_background）や、途中出力を見ただけの打ち切り判断は禁止
+- 全量スイートは数分かかることがある。タイムアウトで切れた場合はタイムアウトを延ばして
+  完走させ、完走した exit code のみを根拠にすること（未完走を赤として報告しない）
+- 赤/緑の根拠は各コマンドの exit code。出力中のエラー文字列だけで赤と決めない`
+
 const LANE_HEADER = `あなたは実装コードのリファインメントレビューアです。コードベースへの読み取りアクセスがあります。
 レビュー対象の差分は次のコマンドで取得すること: ${DIFF_CMD}${workRootNote}`
 
@@ -237,7 +268,9 @@ ${JSON.stringify(accepted.map(p => ({ lane: p.lane, title: p.title, target: p.ta
 - 全提案の適用後に以下のゲートを実行し、赤になったら**原因の適用だけを revert して**再実行、
   全ゲート緑の状態で終えること。revert した提案は reverted に理由つきで含めること:
 ${GATES.map(g => `  - ${g}`).join('\n')}
-- 最終状態のゲート結果（生の出力の要点）を gate_output で報告すること${workRootNote}`
+- 最終状態のゲート結果（生の出力の要点）を gate_output で報告すること
+
+${GATE_PROTOCOL}${workRootNote}`
 
 // ---- フロー（1ラウンド固定 — ループしない）------------------------------------
 
@@ -254,16 +287,46 @@ if (MECH.length > 0) {
 //    あわせて入口ゲートの現況確認を並走させる — codereview 通過後の手動編集等で
 //    ゲートが赤いまま適用に進むと、適用エージェントが存在しない原因を revert で探し始める
 const laneKeys = Object.keys(LANES)
-const entryGateThunk = async () => {
-  const g = await tryAgent(
-    `次のゲートコマンドを順に実行し、すべて緑か確認してください。コードの修正はしないこと。
+const entryGatePrompt = `次のゲートコマンドを順に実行し、すべて緑か確認してください。コードの修正はしないこと。
 赤があれば gate_output に生の出力の要点を入れること:
-${GATES.map(c => `- ${c}`).join('\n')}${workRootNote}`,
-    {
-      label: '入口ゲート確認', phase: 'レビュー', model: 'sonnet', effort: 'low',
-      schema: { type: 'object', required: ['green', 'gate_output'], properties: { green: { type: 'boolean' }, gate_output: { type: 'string' } } },
+${GATES.map(c => `- ${c}`).join('\n')}
+
+${GATE_PROTOCOL}
+- 全コマンドを完走させて exit code を確認できた場合のみ verified=true にすること。
+  完走を確認できなかった（タイムアウト・中断・バックグラウンド化した）場合は
+  verified=false で返す — 未完走を赤として報告しないこと
+- exit_codes には「<コマンド> → <exit code>」を全コマンド分列挙すること${workRootNote}`
+
+const ENTRY_GATE_SCHEMA = {
+  type: 'object',
+  required: ['green', 'verified', 'gate_output'],
+  properties: {
+    green: { type: 'boolean', description: '全コマンドの exit code が 0 か' },
+    verified: { type: 'boolean', description: '全コマンドを完走させ exit code を確認できたか' },
+    exit_codes: { type: 'string', description: '「<コマンド> → <exit code>」の全コマンド分の列挙' },
+    gate_output: { type: 'string' },
+  },
+}
+
+const entryGateThunk = async () => {
+  // 未完走のまま赤を返された場合は 1 回だけ再実行する — 偽 blocked は「原因のない赤」を
+  // 探す作業をユーザーに投げ、レビュー結果ごと捨てることになるため、赤の確定にコストをかける
+  let g = await tryAgent(entryGatePrompt, {
+    label: '入口ゲート確認', phase: 'レビュー', model: 'sonnet', effort: 'low', schema: ENTRY_GATE_SCHEMA,
+  })
+  if (g && !g.verified) {
+    log('入口ゲート: 完走を確認できていない報告（未完走・タイムアウト）— 1 回だけ再実行')
+    g = await tryAgent(entryGatePrompt, {
+      label: '入口ゲート確認(再実行)', phase: 'レビュー', model: 'sonnet', effort: 'low', schema: ENTRY_GATE_SCHEMA,
     })
-  return { entryGate: true, green: g ? g.green : false, gate_output: g ? g.gate_output : '入口ゲート確認エージェント無応答 — 安全側で赤扱い' }
+  }
+  return {
+    entryGate: true,
+    green: g ? g.green && g.verified : false,
+    gate_output: g
+      ? `${g.gate_output || ''}${g.exit_codes ? `\nexit codes: ${g.exit_codes}` : ''}${g.verified ? '' : '\n（完走を確認できないままの報告 — ゲートの実行環境かタイムアウトを疑う）'}`
+      : '入口ゲート確認エージェント無応答 — 安全側で赤扱い',
+  }
 }
 
 const laneThunks = laneKeys.map(key => async () => {

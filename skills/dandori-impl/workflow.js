@@ -43,6 +43,17 @@ if (!A || !A.specDir) {
   throw new Error('args に specDir が必要。任意: maxFixRounds, workRoot')
 }
 
+// 型の明示検査 — 単一パス想定の args に配列を渡すと、後段のパス操作（startsWith 等）が
+// 「.startsWith is not a function」で即死し、期待形が読み取れないまま workflow が落ちる
+// （2026-07-25 実戦観測: codereview の resources に配列を渡して絶対パスガードがクラッシュ）
+for (const name of ['specDir', 'workRoot']) {
+  if (name === 'specDir' || (A[name] !== undefined && A[name] !== null)) {
+    if (typeof A[name] !== 'string' || A[name].trim() === '') {
+      throw new Error(`args.${name} は空でない文字列で渡すこと（現在: ${JSON.stringify(A[name])}）`)
+    }
+  }
+}
+
 const SPEC_DIR = A.specDir.replace(/\/+$/, '')
 const SPEC = `${SPEC_DIR}/spec.md`
 const DESIGN = `${SPEC_DIR}/design.md`
@@ -142,11 +153,24 @@ const IMPL_SCHEMA = {
   },
 }
 
+// ゲート実行の規約 — 「起動した」と「完走を見た」を分ける。全量スイートは数分かかるため、
+// バックグラウンド実行や途中出力での打ち切り判断は偽の赤を生む（2026-07-25 実戦観測:
+// refine の入口ゲートが全量テストの完了を待たず green=false を返した）。この工程では
+// 偽の赤が不要な修正ディスパッチを起動するため、赤の確定にコストをかける
+const GATE_PROTOCOL = `ゲート実行の規約:
+- 各コマンドは前景で実行し、**プロセスの終了と exit code を確認するまで判定しない**。
+  バックグラウンド実行（\`&\` / run_in_background）や、途中出力を見ただけの打ち切り判断は禁止
+- 全量スイートは数分かかることがある。タイムアウトで切れた場合はタイムアウトを延ばして
+  完走させ、完走した exit code のみを根拠にすること（未完走を赤として報告しない）
+- 赤/緑の根拠は各コマンドの exit code。出力中のエラー文字列だけで赤と決めない`
+
 const VERIFY_SCHEMA = {
   type: 'object',
-  required: ['green', 'gate_output'],
+  required: ['green', 'verified', 'gate_output'],
   properties: {
-    green: { type: 'boolean' },
+    green: { type: 'boolean', description: '全コマンドの exit code が 0 か' },
+    verified: { type: 'boolean', description: '全コマンドを完走させ exit code を確認できたか' },
+    exit_codes: { type: 'string', description: '「<コマンド> → <exit code>」の全コマンド分の列挙' },
     gate_output: { type: 'string', description: '生の出力の要点（赤があれば失敗箇所）' },
   },
 }
@@ -252,7 +276,12 @@ ${gates.map(g => `  - ${g}`).join('\n')}`
 
 const verifyPrompt = (gates) => `次のゲートコマンドを順に実行し、すべて緑か確認してください。コードの修正はしないこと。
 実装エージェントの自己申告の検証が目的です。赤があれば gate_output に生の出力の要点を入れること:
-${gates.map(g => `- ${g}`).join('\n')}${workRootNote}`
+${gates.map(g => `- ${g}`).join('\n')}
+
+${GATE_PROTOCOL}
+- 全コマンドを完走させて exit code を確認できた場合のみ verified=true にすること。
+  完走を確認できなかった（タイムアウト・中断・バックグラウンド化した）場合は verified=false で返す
+- exit_codes には「<コマンド> → <exit code>」を全コマンド分列挙すること${workRootNote}`
 
 const discoveryPrompt = (m, discoveries) => `あなたは発見ログの還流係です。マイルストーン ${m.id} の実装エージェントが報告した
 以下の [発見]（仕様・設計と現実のコードの食い違い）を処理してください。
@@ -327,8 +356,20 @@ for (const m of remaining) {
     return { status: 'halted', milestone: m.id, reason: report.halt_reason || '不変条件抵触（詳細未報告）', discoveries: [...allDiscoveries, ...pending], discoveriesRecorded: recorded, completed }
   }
 
-  // 3. ゲート検証 — 実装エージェントの「通りました」を信用せず独立に再実行
-  let verified = await tryAgent(verifyPrompt(briefed.gates), { label: `ゲート検証:${m.id}`, phase: `${m.id} 検証`, model: 'sonnet', effort: 'low', schema: VERIFY_SCHEMA })
+  // 3. ゲート検証 — 実装エージェントの「通りました」を信用せず独立に再実行。
+  //    未完走のまま赤が返った場合は 1 回だけ再実行する（偽の赤は不要な修正ディスパッチを起動する）
+  const verifyGates = async (label) => {
+    let v = await tryAgent(verifyPrompt(briefed.gates), { label, phase: `${m.id} 検証`, model: 'sonnet', effort: 'low', schema: VERIFY_SCHEMA })
+    if (v && !v.verified) {
+      log(`${m.id}: ゲートの完走を確認できていない報告（未完走・タイムアウト）— 1 回だけ再実行`)
+      v = await tryAgent(verifyPrompt(briefed.gates), { label: `${label}(再実行)`, phase: `${m.id} 検証`, model: 'sonnet', effort: 'low', schema: VERIFY_SCHEMA })
+    }
+    if (v && !v.verified) {
+      return { ...v, green: false, gate_output: `${v.gate_output || ''}\n（完走を確認できないままの報告 — ゲートの実行環境かタイムアウトを疑う）` }
+    }
+    return v
+  }
+  let verified = await verifyGates(`ゲート検証:${m.id}`)
   let fixRounds = 0
   while ((!verified || !verified.green) && fixRounds < MAX_FIX_ROUNDS) {
     fixRounds += 1
@@ -341,7 +382,7 @@ for (const m of remaining) {
       return { status: 'halted', milestone: m.id, reason: fix.halt_reason || '不変条件抵触（詳細未報告）', discoveries: [...allDiscoveries, ...pending], discoveriesRecorded: recorded, completed }
     }
     report = { ...report, discoveries: [...report.discoveries, ...fix.discoveries] }
-    verified = await tryAgent(verifyPrompt(briefed.gates), { label: `ゲート検証:${m.id}#${fixRounds}`, phase: `${m.id} 検証`, model: 'sonnet', effort: 'low', schema: VERIFY_SCHEMA })
+    verified = await verifyGates(`ゲート検証:${m.id}#${fixRounds}`)
   }
   if (!verified || !verified.green) {
     const pending = report.discoveries.map(d => ({ ...d, milestone: m.id }))

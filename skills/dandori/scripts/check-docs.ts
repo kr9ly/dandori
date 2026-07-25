@@ -64,9 +64,20 @@
  *   指摘ゼロのラウンドは台帳に行が残らず観測できない（過去の停滞パターンから escalated を
  *   返し続ける）ため、`<!-- round: C Rd=7 指摘なし -->` 形式のマーカー行で記録する
  *   （blocker/major の行を追記したラウンドでは不要）。マーカーの追記は
- *   --mark-zero-round <R|C> <rd> で行う（決定的・冪等 — 検査・収束判定と同一コマンドで済む。
+ *   --mark-zero-round <R|C> <rd|auto> で行う（決定的・冪等 — 検査・収束判定と同一コマンドで済む。
  *   エージェントによるマーカーの自由編集は監査改竄と誤検知されブロックされた実戦観測があり、
- *   このオプションが恒久対策 2026-07-21）。
+ *   このオプションが恒久対策 2026-07-21）。`auto` は台帳の実ラウンド番号（行 + 既存マーカーの
+ *   最大 Rd）+1 を導出する — 呼び出し側のローカルなラウンド数え上げを渡すと既存 Rd 系列と
+ *   食い違うマーカーが打たれ、収束済みなのに escalated になる（2026-07-25 実戦観測）。
+ *
+ * ledger-append モード — 台帳への行追記（検査ではなく書き込み）:
+ *   ID 発番・行の書式・処置と深刻度の語彙・書き先パスをスクリプト側で固定し、記録係
+ *   エージェントには既存行との同一論点照合だけを残す。エージェントに追記させる設計では
+ *   書き落とし（発番済み ID の欠番化）・worktree 内複製への二重書き込み・ID 再採番衝突が
+ *   プロンプト強化を重ねても再発した（2026-07-25 恒久対策）。同一 Rd に同一論点の行が
+ *   あれば追記せず既存 ID を返す（冪等 — 二重実行・新規実行での再開でも行が増えない）。
+ *   入力は JSON 配列 [{index, severity, topic, action?, reason?}]、出力は
+ *   `[appended] index=<i> id=<ID> status=<new|existing>` の機械可読行。
  *   収束判定（指摘とは別枠 — exit code に影響しない）:
  *     passed = 最新ラウンド（マーカーのみのラウンド含む）の blocker+major がゼロ
  *              （反証破棄は R/C 共通で生存数から除外）
@@ -153,7 +164,9 @@
  *   node check-docs.ts plan <spec.md> <plan.md>
  *   node check-docs.ts design <spec.md> <design.md>
  *   node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...> [--revision <n>] [--scope <優先ディレクトリ>...]
- *   node check-docs.ts ledger <review-ledger.md> [--mark-zero-round <R|C> <rd>]
+ *   node check-docs.ts ledger <review-ledger.md> [--mark-zero-round <R|C> <rd|auto>]
+ *   node check-docs.ts ledger-append <review-ledger.md> --prefix <R|C|F> --rd <n> --rows-stdin <<'JSON' ... JSON
+ *     （--rows <json> でも渡せる。追記は決定的・冪等 — 行の書式と ID 発番はここが唯一の出所）
  *   node check-docs.ts map <mapファイル.md...> [--root <ソースルート>]
  *     （アンカーはソースルートの git リポジトリルート相対。--root 省略時は map の所在から導出）
  *   node check-docs.ts state <state.yaml>
@@ -385,12 +398,13 @@ const USAGE =
   '       node check-docs.ts plan <spec.md> <plan.md>\n' +
   '       node check-docs.ts design <spec.md> <design.md>\n' +
   '       node check-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...> [--revision <n>] [--scope <優先ディレクトリ>...]\n' +
-  '       node check-docs.ts ledger <review-ledger.md> [--mark-zero-round <R|C> <rd>]\n' +
+  '       node check-docs.ts ledger <review-ledger.md> [--mark-zero-round <R|C> <rd|auto>]\n' +
+  '       node check-docs.ts ledger-append <review-ledger.md> --prefix <R|C|F> --rd <n> (--rows <json> | --rows-stdin)\n' +
   '       node check-docs.ts map <mapファイル.md...> [--root <ソースルート>]\n' +
   '       node check-docs.ts state <state.yaml>\n' +
   '       node check-docs.ts residue <ファイル|ディレクトリ...>'
 
-const MODES = ['spec', 'plan', 'design', 'trace', 'ledger', 'map', 'state', 'residue']
+const MODES = ['spec', 'plan', 'design', 'trace', 'ledger', 'ledger-append', 'map', 'state', 'residue']
 if (!MODES.includes(mode)) {
   console.error(USAGE)
   process.exit(2)
@@ -926,6 +940,136 @@ if (mode === 'design') {
   finishReport()
 }
 
+// ---- ledger-append モード --------------------------------------------------------
+
+/**
+ * 台帳への行追記を決定的に行う。ID 発番・行の書式・処置の語彙・書き先パスをすべて
+ * ここで固定し、記録係エージェントには「既存行との同一論点照合」だけを残す。
+ *
+ * 動機（2026-07-25 実戦観測の恒久対策）: 追記そのものをエージェントにさせる設計では、
+ * (a) 発番した ID の行が台帳に書かれない書き落とし（C-2 / C-31 の欠番化）、
+ * (b) worktree 内の複製へ書き込む台帳二重化、
+ * (c) ラウンドを跨いだ ID の再採番衝突
+ * が、プロンプトの強化を重ねても再発し続けた。書き込みを Edit から外すのが唯一の根治。
+ *
+ * 冪等 — 同一 Rd に同一論点の行が既にあれば追記せず既存 ID を返す（同一ラウンドの
+ * 二重実行・新規実行での再開でも行が増えない）。
+ */
+if (mode === 'ledger-append') {
+  let prefix: string | null = null
+  let rd = 0
+  let rowsRaw: string | null = null
+  let fromStdin = false
+  const paths: string[] = []
+  for (let i = 1; i < argvRest.length; i++) {
+    const a = argvRest[i]
+    if (a === '--prefix') { prefix = argvRest[++i] ?? null; continue }
+    if (a === '--rd') { rd = Number(argvRest[++i]); continue }
+    if (a === '--rows') { rowsRaw = argvRest[++i] ?? null; continue }
+    if (a === '--rows-stdin') { fromStdin = true; continue }
+    if (a.startsWith('--')) { console.error(`未知のオプション: ${a}\n${USAGE}`); process.exit(2) }
+    paths.push(a)
+  }
+  if (paths.length !== 1 || (prefix !== 'R' && prefix !== 'C' && prefix !== 'F') || !Number.isInteger(rd) || rd < 1) {
+    console.error(`ledger-append には台帳パス 1 つ・--prefix <R|C|F>・--rd <正の整数> が必要\n${USAGE}`)
+    process.exit(2)
+  }
+  if (fromStdin === (rowsRaw !== null)) {
+    console.error(`--rows <json> と --rows-stdin はどちらか一方を指定する\n${USAGE}`)
+    process.exit(2)
+  }
+  const ledgerPath = paths[0]
+
+  let rowsInput: { index?: number; severity: string; topic: string; action?: string; reason?: string }[]
+  try {
+    // @ts-ignore -- stdin は fd 0（'/dev/stdin' はプラットフォーム差がある）
+    const raw = fromStdin ? readFileSync(0 as unknown as string, 'utf-8') : rowsRaw!
+    rowsInput = JSON.parse(raw)
+    if (!Array.isArray(rowsInput)) throw new Error('配列でない')
+  } catch (e) {
+    console.error(`--rows の JSON を解釈できない（期待形: [{"index":0,"severity":"major","topic":"...","action":"","reason":"..."}]）: ${(e as { message?: string }).message ?? e}`)
+    process.exit(2)
+  }
+  if (rowsInput.length === 0) {
+    console.log('追記対象ゼロ件 — 台帳は変更なし')
+    process.exit(0)
+  }
+
+  // 語彙は書き込み時点で強制する — 語彙外の処置セル（「対応済」等の言い換え）が台帳に
+  // 入ると L1 が escalated を誘発する（2026-07-23 実戦観測）。入口で弾いて混入させない
+  const SEVERITY_OK = new Set(['blocker', 'major', 'minor'])
+  const ACTION_OK = new Set(['', '反映済', '却下', '保留', '反証破棄'])
+  for (const [i, r] of rowsInput.entries()) {
+    if (!r || typeof r.topic !== 'string' || r.topic.trim() === '') {
+      console.error(`rows[${i}]: topic（論点の一行要約）が必要`)
+      process.exit(2)
+    }
+    if (!SEVERITY_OK.has(r.severity)) {
+      console.error(`rows[${i}]: severity「${r.severity}」は語彙外 — blocker / major / minor`)
+      process.exit(2)
+    }
+    const action = r.action ?? ''
+    if (!ACTION_OK.has(action) && !/^再燃→\s*\S+$/.test(action)) {
+      console.error(`rows[${i}]: action「${action}」は語彙外 — 空 / 反映済 / 却下 / 保留 / 反証破棄 / 再燃→<ID>`)
+      process.exit(2)
+    }
+  }
+
+  let existing = ''
+  try { existing = readFileSync(ledgerPath, 'utf-8') } catch { existing = '' }
+
+  // 既存行の走査 — 同一接頭辞の最大番号（発番フロア）と、(Rd, 論点) の既存索引（冪等判定用）
+  let maxNum = 0
+  const byRdTopic = new Map<string, string>()
+  {
+    let inFence = false
+    for (const line of existing.split('\n')) {
+      if (/^```/.test(line.trim())) { inFence = !inFence; continue }
+      if (inFence) continue
+      const m = line.trim().match(/^\|(.+)\|$/)
+      if (!m) continue
+      const cells = splitCells(m[1])
+      const idm = (cells[0] ?? '').match(/^([RCF])-(\d+)$/)
+      if (!idm || idm[1] !== prefix) continue
+      maxNum = Math.max(maxNum, Number(idm[2]))
+      byRdTopic.set(`${cells[1]} ${cells[3] ?? ''}`, cells[0])
+    }
+  }
+
+  const escapeCell = (s: unknown): string =>
+    String(s ?? '').replace(/\r?\n+/g, ' ').replace(/\|/g, '\\|').trim()
+
+  const appendLines: string[] = []
+  const report: string[] = []
+  let next = maxNum + 1
+  for (const [i, r] of rowsInput.entries()) {
+    const index = Number.isInteger(r.index) ? r.index! : i
+    const topic = escapeCell(r.topic)
+    const dup = byRdTopic.get(`${rd} ${topic}`)
+    if (dup !== undefined) {
+      report.push(`[appended] index=${index} id=${dup} status=existing`)
+      continue
+    }
+    const id = `${prefix}-${next++}`
+    appendLines.push(`| ${id} | ${rd} | ${r.severity} | ${topic} | ${escapeCell(r.action ?? '')} | ${escapeCell(r.reason ?? '')} |`)
+    byRdTopic.set(`${rd} ${topic}`, id)
+    report.push(`[appended] index=${index} id=${id} status=new`)
+  }
+
+  if (appendLines.length > 0) {
+    // 台帳が未作成 / テーブルヘッダがない場合はヘッダから作る（正準形式はここが唯一の出所）
+    const hasHeader = /^\|\s*ID\s*\|/m.test(existing)
+    const header = hasHeader ? '' : `${existing.trim() === '' ? '# 指摘台帳\n\n' : '\n'}| ID | Rd | 深刻度 | 論点 | 処置 | 根拠・理由 |\n| --- | --- | --- | --- | --- | --- |\n`
+    const lead = existing === '' || existing.endsWith('\n') ? '' : '\n'
+    appendFileSync(ledgerPath, `${lead}${header}${appendLines.join('\n')}\n`)
+  }
+
+  console.log(`# 台帳追記 — ${ledgerPath}`)
+  console.log(`接頭辞 ${prefix} / Rd=${rd} / 新規 ${appendLines.length} 件 / 既存一致 ${rowsInput.length - appendLines.length} 件`)
+  for (const line of report) console.log(line)
+  process.exit(0)
+}
+
 // ---- ledger モード ----------------------------------------------------------------
 
 if (mode === 'ledger') {
@@ -937,12 +1081,16 @@ if (mode === 'ledger') {
     if (a === '--mark-zero-round') {
       const p = argvRest[++i]
       const v = argvRest[++i]
-      if ((p !== 'R' && p !== 'C') || v === undefined || !/^[1-9]\d*$/.test(v)) {
-        console.error(`--mark-zero-round には接頭辞（R | C）とラウンド番号（正の整数）を渡す\n${USAGE}`)
+      if ((p !== 'R' && p !== 'C') || v === undefined || !(v === 'auto' || /^[1-9]\d*$/.test(v))) {
+        console.error(`--mark-zero-round には接頭辞（R | C）とラウンド番号（正の整数 | auto）を渡す\n${USAGE}`)
         process.exit(2)
       }
       markPrefix = p
-      markRd = Number(v)
+      // auto は「台帳の実ラウンド番号 + 1」を後段で導出する（-1 は導出待ちの標識）。
+      // 呼び出し側のローカルなラウンド数え上げを台帳に持ち込むと、既存行の Rd 系列と
+      // 食い違うマーカーが打たれ、収束済みなのに L5 矛盾・停滞判定で escalated になる
+      // （2026-07-25 実戦観測: C 系列に workflow ローカルの 1〜5 が打たれてマーカー衝突）
+      markRd = v === 'auto' ? -1 : Number(v)
       continue
     }
     if (a.startsWith('--')) { console.error(`未知のオプション: ${a}\n${USAGE}`); process.exit(2) }
@@ -956,8 +1104,31 @@ if (mode === 'ledger') {
   // 監査改竄と誤検知されブロックされた実戦観測 2026-07-21 への恒久対策）。
   // 冪等 — 同一マーカーが既にあれば何もしない。追記後は通常の検査・収束判定に続く
   if (markPrefix !== null && markRd !== null) {
-    const marker = `<!-- round: ${markPrefix} Rd=${markRd} 指摘なし -->`
     const text = readLines(ledgerPath, '台帳').join('\n')
+    if (markRd === -1) {
+      // 「指摘なし」ラウンド = 行がある最新ラウンドの次。行由来とマーカー由来の最大 Rd を
+      // 分けて数え、マーカーが行より先を主張しているなら既にゼロラウンドが記録済み —
+      // その Rd を再利用して既存マーカーの冪等スキップに合流させる（auto の再実行で
+      // ラウンドが際限なく進むのを防ぐ）
+      let rowMaxRd = 0
+      let markerMaxRd = 0
+      let inFenceRd = false
+      for (const line of text.split('\n')) {
+        if (/^```/.test(line.trim())) { inFenceRd = !inFenceRd; continue }
+        if (inFenceRd) continue
+        const zm = line.match(new RegExp(`<!--\\s*round:\\s*${markPrefix}\\s+Rd=(\\d+)\\s+指摘なし\\s*-->`))
+        if (zm) { markerMaxRd = Math.max(markerMaxRd, Number(zm[1])); continue }
+        const tm = line.trim().match(/^\|(.+)\|$/)
+        if (!tm) continue
+        const cells = splitCells(tm[1])
+        if ((cells[0] ?? '').match(/^([RCF])-(\d+)$/)?.[1] !== markPrefix) continue
+        const n = Number(cells[1])
+        if (Number.isInteger(n)) rowMaxRd = Math.max(rowMaxRd, n)
+      }
+      markRd = markerMaxRd > rowMaxRd ? markerMaxRd : rowMaxRd + 1
+      console.log(`マーカーのラウンド番号を台帳から導出: ${markPrefix} Rd=${markRd}（行の最大 Rd=${rowMaxRd} / マーカーの最大 Rd=${markerMaxRd}）`)
+    }
+    const marker = `<!-- round: ${markPrefix} Rd=${markRd} 指摘なし -->`
     const already = new RegExp(`<!--\\s*round:\\s*${markPrefix}\\s+Rd=${markRd}\\s+指摘なし\\s*-->`).test(text)
     if (already) {
       console.log(`マーカー既存 — 追記なし: ${marker}`)
