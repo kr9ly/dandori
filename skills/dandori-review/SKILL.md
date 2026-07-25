@@ -128,7 +128,7 @@ spec.md に状態モデル（`dandori-state-model` ブロック）がある場�
 - **行の追記は手編集でなくチェッカーの `ledger-append` で行う**（決定的・冪等。R/C/F 共通）:
 
   ```
-  node <dandori-repo>/skills/dandori/scripts/check-docs.ts ledger-append <review-ledger.md> \
+  node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts ledger-append <review-ledger.md> \
     --prefix R --rd <ラウンド> --rows-stdin <<'JSON'
   [{"index":0,"severity":"minor","topic":"論点の一行","action":"保留","reason":"spec §3"}]
   JSON
@@ -177,7 +177,7 @@ spec.md に状態モデル（`dandori-state-model` ブロック）がある場�
 ### 収束条件
 
 台帳から機械的に判定する。判定はチェッカーが機械化している —
-`node <dandori-repo>/skills/dandori/scripts/check-docs.ts ledger <review-ledger.md>`
+`node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts ledger <review-ledger.md>`
 がラウンド推移と判定（passed / escalated / 継続）を出力し、あわせて台帳の形式
 （未処置の行・理由なし却下・保留の誤用・保留の滞留・再燃参照切れ・ID 重複/欠番）を検査する。
 各ラウンドの処置記録後に実行する。判定基準:
@@ -204,7 +204,7 @@ spec.md に状態モデル（`dandori-state-model` ブロック）がある場�
 構造的な強制 — 「レビューアにはパスだけを渡す」「台帳を渡さない」「各ラウンドは新しい
 レビューア」がプロンプトテンプレートに固定され、実行のたびの自制に依存しなくなる。
 
-- args: `specDir`（specs/<feature>）/ `checkDocs`（check-docs.ts の実行プレフィックス）、
+- args: `specDir`（specs/<feature>）/ `checkDocs`（dandori-docs.ts の実行プレフィックス）、
   任意で `reviewDocs`（観点に加える参照ドキュメントのパス配列）/
   `checkStateModel`（check-state-model.ts の実行プレフィックス — 状態モデルつき spec では
   **必ず渡す**。反映エージェントが反映後にチェッカーを exit 0 まで回すことを強制し、
@@ -252,5 +252,5 @@ spec.md に状態モデル（`dandori-state-model` ブロック）がある場�
 - `review.status: passed`（または escalated 後のユーザー裁定で通過）
 - 反映内容がすべて spec.md / design.md に書き込まれている（会話にだけ存在する修正はゼロ）
 - 全指摘が台帳に記録され、処置列が埋まっている（`保留` はユーザー裁定済みの minor のみ —
-  裁定を理由セルに書く。`check-docs.ts ledger` の exit 0 で機械確認する）
+  裁定を理由セルに書く。`dandori-docs.ts ledger` の exit 0 で機械確認する）
 - state.yaml: `phase: spike`、`phases_done` に review 追加

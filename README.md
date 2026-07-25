@@ -222,13 +222,15 @@ I（独立性）には両面がある。乖離マーク（`e2e→unit`）は「u
 移し切ってから仕様書を処分する、という解き方。
 
 これとは別に、正準フォーマット層は常時機械検査される —
-`skills/dandori/scripts/check-docs.ts` が spec.md の形式（必須セクション・B 行フィールド・
+`skills/dandori/scripts/dandori-docs.ts` が spec.md の形式（必須セクション・B 行フィールド・
 ゲートタグ語彙・fix 後の改番検知）と spec ↔ plan の B 行カバレッジ（未カバー B 行 =
 実装されない仕様、の機械検出）を突合し、spec の fix / plan の確定の前提条件になる。
 design.md の検証マーク・B 行対応・軸対応の検査（ground の完了条件）、B-ID ↔ テストコードの
 突合による gate の初期トレース表生成、review-ledger の収束判定（review / codereview）、
 map の証拠アンカー死活検査（survey verify）、state.yaml の整合検査（ルーターの再開判定）も
-同じチェッカーが担う。
+同じツールが担う。検査だけでなく決定的な生成・書き込み（初期トレース表の生成、指摘台帳への
+行追記）も同じ入口に集めてある — エージェントに任せると壊れる作業の置き場、という括り。
+実装はモードごとのファイル（`scripts/docs/modes/`）+ 共通部品（`scripts/docs/`）に分かれる。
 
 ## インストール
 

@@ -13,7 +13,7 @@ description: dandori プロセスの仕様策定工程。ユーザーと壁打�
 
 - **たたき台を先に出す**。白紙の質問をユーザーに投げない。元ドキュメント・会話・コードから叩き台を作り、フィードバックをもらうループで回す
 - **合意した内容は都度 spec.md に書き出す**。§5 の fix を待たず、各段の壁打ちが終わるたびに spec.md へ追記する。冒頭に `status: draft` と各セクションの確定/未確定を明記し、fix 時に外す。セッション断で壁打ち結果を失わないため、また会話の中にしか存在しない合意を作らないため
-- **逐次追記でも正準フォーマットを崩さない**。追記は既存セクションの中身を更新する形で行い、同名セクションを新設しない（「未解決事項」が2つできる等）。書き出し後にフォーマット検査（`node <dandori-repo>/skills/dandori/scripts/check-docs.ts spec <spec.md>`）を実行し、セクション構成・B 行フィールド・ゲートタグが正準定義と一致することを確認する
+- **逐次追記でも正準フォーマットを崩さない**。追記は既存セクションの中身を更新する形で行い、同名セクションを新設しない（「未解決事項」が2つできる等）。書き出し後にフォーマット検査（`node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts spec <spec.md>`）を実行し、セクション構成・B 行フィールド・ゲートタグが正準定義と一致することを確認する
 - **spec.md を書くたびに state.yaml も更新する**。`progress`（工程内の現在地一行、例: `§3 異常系マトリクスの壁打ち中`）と `updated` を書き換え、state を常に現状と一致させる
 - **一度に全部聞かない**。§1→§4 を段階ごとに壁打ちする。ただし各段の往復は1〜2回で切り上げ、疑問は「未解決事項」に積んで先へ進む
 - **議題のシナリオはフロー図で出す**。§2〜3 で交点・異常系・連鎖を検討するときは、対象シナリオ単位の Mermaid フローチャートをたたき台にする（「シナリオフロー図」節参照）
@@ -171,7 +171,7 @@ spec.md 全体をユーザーに提示し、最終確認を得て fix。state.ya
 `node <dandori-repo>/skills/dandori-spec/scripts/render-spec-tree.ts <spec.md> > <一時ファイル.md>`
 （背骨は状態モデルの `flow:` セクション — 書き方は `docs/appendix-state-model.md` 参照）
 
-**フォーマット検査グリーン（`check-docs.ts spec <spec.md>` が exit 0）が fix の前提条件**。
+**フォーマット検査グリーン（`dandori-docs.ts spec <spec.md>` が exit 0）が fix の前提条件**。
 必須セクション・B 行フィールド・ゲートタグ語彙・B-ID の重複/欠番を機械検査する。
 
 状態モデルを書いた spec では、加えて**状態モデルチェッカーグリーン（exit 0）が fix の前提条件**。
@@ -233,7 +233,7 @@ B 行には `- Rev: <n>` フィールドを付ける — gate の差分トレー
 識別する目印（初回サイクルの行は無印のまま）。
 fix 済み spec を再編集したときは改番検知を機械で掛ける:
 `git show HEAD:<spec.md> > /tmp/base.md` で旧版を取り出し、
-`node <dandori-repo>/skills/dandori/scripts/check-docs.ts spec <spec.md> --baseline /tmp/base.md`
+`node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts spec <spec.md> --baseline /tmp/base.md`
 （タイトルのすり替え・取り消し線なしの削除・末尾以外への挿入を検出する）。
 
 ## 短縮コース時
@@ -247,7 +247,7 @@ dandori-impl へ直行する（マイルストーン1個の plan を暗黙生成
 
 - spec.md がユーザー確認済みで fix されている
 - 全 B 行にゲートタグが付いている
-- フォーマット検査（`check-docs.ts spec`）が exit 0
+- フォーマット検査（`dandori-docs.ts spec`）が exit 0
 - 状態モデルを書いた spec: 状態モデルチェッカーが exit 0（ground 送り項目は残ってよい）
 - state.yaml: `phase: ground`（`sketch.status: pending` の UI タスクは `phase: sketch`、
   短縮コースは `phase: impl`）、`phases_done` に spec 追加。visual/manual の B 行が

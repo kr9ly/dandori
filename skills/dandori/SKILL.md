@@ -107,7 +107,7 @@ dandori-feedback で再開できる（ドキュメント処分済みのため sp
 ### 3. 再開
 
 まず state.yaml の整合検査を実行する:
-`node <dandori-repo>/skills/dandori/scripts/check-docs.ts state <state.yaml>`
+`node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts state <state.yaml>`
 （語彙・フェーズと phases_done の矛盾・完了済み工程の status・成果物ファイルの
 存在/処分漏れを機械検査する）。指摘があれば報告に含め、state の腐りを
 実態に合わせて直してから次工程へ進む（ドキュメントが正 — 実態の側を state に合わせない）。
@@ -166,7 +166,7 @@ progress: §2 正常系の壁打ち中   # 工程内の現在地（一行）。�
 updated: 2026-07-03
 ```
 
-各工程スキルは**工程内でドキュメント（spec.md / design.md / plan.md）を更新するたびに** `progress` と `updated` を書き換え、state.yaml を常に現状と一致させる。工程完了時だけの更新では、中断時に再開点が失われる。形式・整合は `check-docs.ts state` で機械検査できる（再開時は必須、工程完了時の更新後にも推奨）。フェーズの逆行（例: spike で前提が
+各工程スキルは**工程内でドキュメント（spec.md / design.md / plan.md）を更新するたびに** `progress` と `updated` を書き換え、state.yaml を常に現状と一致させる。工程完了時だけの更新では、中断時に再開点が失われる。形式・整合は `dandori-docs.ts state` で機械検査できる（再開時は必須、工程完了時の更新後にも推奨）。フェーズの逆行（例: spike で前提が
 崩れて spec に戻る）も正当な遷移 — その場合 `phases_done` から該当フェーズを外し、理由を
 design.md の発見ログに記録する。
 

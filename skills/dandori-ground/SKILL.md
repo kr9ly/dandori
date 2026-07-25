@@ -73,7 +73,7 @@ spec の各軸について、それを実現するコード構造（型 / パラ
 
 **Gate 乖離行の消化**（乖離マーク `<現状>→<希望>` がある spec のみ — 無ければスキップ。
 守る性質: I 独立性 — 振る舞いを小さいテストで単独に固定できる）:
-spec の乖離行（`check-docs.ts spec` が別枠で列挙する）ごとに、希望の固定単位を可能にする
+spec の乖離行（`dandori-docs.ts spec` が別枠で列挙する）ごとに、希望の固定単位を可能にする
 seam（切り出し・分離点）を design に置けるか検討する:
 
 - 置ける → 新規実装/改変箇所（と軸対応）に seam を設計し、spec のタグを希望側に昇格する
@@ -138,7 +138,7 @@ spike はスキップ可能 — その旨を design.md に明記する。
 ### 4. 書き出し
 
 design.md を作成したら形式検査を実行し、exit 0 にする:
-`node <dandori-repo>/skills/dandori/scripts/check-docs.ts design <spec.md> <design.md>`
+`node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts design <spec.md> <design.md>`
 （必須セクション・検証マークの有無と証拠形式・B 行対応の突合 — 未対応 B 行や
 幽霊参照を機械検出する）。その上で state.yaml を更新する。この工程にユーザー壁打ちは不要 — 
 成果物は次工程の dandori-review が第三者検証する。
@@ -185,13 +185,13 @@ design.md を作成したら形式検査を実行し、exit 0 にする:
 - design.md が存在し、全前提にマークが付いている
 - 改変箇所・新規実装が spec.md の B 行と対応付いている（どの B 行にも土台/改変/新規の
   対応がない場合、spec か調査のどちらかに穴がある — 解消してから完了とする）
-- 上記2点を形式検査（`check-docs.ts design`）の exit 0 で機械確認している
+- 上記2点を形式検査（`dandori-docs.ts design`）の exit 0 で機械確認している
 - **spec.md の「未解決事項」を走査し、ground の調査で解消したものを spec.md に書き戻している**
   （取り消し線 + 解消内容 + 根拠の所在。design.md に書くだけでは spec 側が未解決のまま残る）
 - 状態モデルがある spec: ground 送り項目を消化してモデルに書き戻し、チェッカーが
   exit 0 かつ ground 送り項目ゼロ（消化しきれないものはユーザー裁定の上で残してよいが黙認は不可）
 - 状態モデルがある spec: design.md に「軸対応」節があり全軸を判定つきでカバーしている
-  （`check-docs.ts design` の D5 が機械検査）。⚠ が残る場合はユーザー裁定を経る（黙認不可）
+  （`dandori-docs.ts design` の D5 が機械検査）。⚠ が残る場合はユーザー裁定を経る（黙認不可）
 - Gate 乖離行がある spec: 全乖離行が消化されている（タグ昇格、または解消不能理由つきの残存）
 - design.md に seam エントリがある: 全 seam に結線行が指名されている（`結線: B-n`。
   該当 B 行がなく spec 還流になったものはユーザー裁定済み）

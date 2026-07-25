@@ -100,7 +100,7 @@ resources.md に記録する（例: `` `skeleton modules .` — モジュール�
 ## verify — 鮮度検査
 
 1. アンカー死活検査を実行する:
-   `node <dandori-repo>/skills/dandori/scripts/check-docs.ts map .dandori/map/*.md`
+   `node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts map .dandori/map/*.md`
    （generated-at hash 以降の変更ファイルとの突合、アンカー先の消滅 — ファイル・行・
    シンボル、アンカーや等級のない主張、を機械列挙する。状態マップブロックの
    anchor: も対象）。worktree 並列レーン等でソースルートが .dandori の所在と
@@ -176,7 +176,7 @@ design.md を走査し、以下を昇格候補として抽出する:
 ## 完了条件
 
 - generate: map 3ファイルが存在し、全主張に証拠アンカーと等級が付いている
-  （`check-docs.ts map` の V4/V5 がゼロであることで機械確認する）。
+  （`dandori-docs.ts map` の V4/V5 がゼロであることで機械確認する）。
   resources.md に map と再生成コマンドのエントリがある
 - verify: 腐った主張の一覧（ゼロ件ならその旨）をユーザーに提示した
 - update: 影響範囲の主張が更新され、commit hash が HEAD と一致している

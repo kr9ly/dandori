@@ -50,7 +50,7 @@ plan に書かず、メインエージェントの直接駆動（工程遷移）
 ### 4. 確定
 
 plan.md を書き出したら、カバレッジ検査を実行する:
-`node <dandori-repo>/skills/dandori/scripts/check-docs.ts plan <spec.md> <plan.md>`
+`node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts plan <spec.md> <plan.md>`
 （未カバー B 行・spec に存在しない B-ID への参照・削除済み B 行への参照・
 対応 B 行ゼロのマイルストーンを機械検出する）。exit 0 にしてから
 ユーザーに概要（マイルストーン一覧と順序の根拠）を提示して確認を得る。
@@ -81,7 +81,7 @@ plan.md を書き出したら、カバレッジ検査を実行する:
 ## 完了条件
 
 - plan.md が存在し、全 B 行がいずれかのマイルストーンにカバーされている
-  （カバー漏れの B 行 = 実装されない仕様。カバレッジ検査 `check-docs.ts plan` の exit 0 で確認する）
+  （カバー漏れの B 行 = 実装されない仕様。カバレッジ検査 `dandori-docs.ts plan` の exit 0 で確認する）
 - ユーザーが分割を確認済み
 - state.yaml: `phase: impl`、`phases_done` に plan 追加、
   `impl.milestones_total` を設定

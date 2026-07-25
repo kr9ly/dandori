@@ -34,7 +34,7 @@ annotate（付与）→ strip（除去）の順序は固定 — annotate で付�
 trace.md の根拠列（file:line）から対象ファイル集合を確定し、残存言及を機械列挙する:
 
 ```
-node <dandori-repo>/skills/dandori/scripts/check-docs.ts residue <対象ファイル|ディレクトリ...>
+node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts residue <対象ファイル|ディレクトリ...>
 ```
 
 B-ID トークンと dandori への言及が file:line つきで列挙される。**対象は今回の

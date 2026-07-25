@@ -113,7 +113,7 @@ design.md の seam エントリが指名する結線行（`結線: B-n`）を実
     （軽微なら B 行を修正して続行、重大なら plan からやり直し）
 - state.yaml の `impl.milestones_done` を記録する — 整数カウンタのインクリメント（逐次）または
   完了マイルストーン ID の追記（`[M1, M2]` 形式 — 並列実装で完了順が M 番号順と一致しないときはこちら。
-  workflow.js はこの形式で記録する）。check-docs.ts state は両形式を受理する
+  workflow.js はこの形式で記録する）。dandori-docs.ts state は両形式を受理する
 
 ### 4. 進捗報告
 

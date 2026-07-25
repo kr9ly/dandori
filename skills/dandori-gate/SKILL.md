@@ -33,7 +33,7 @@ spec.md の全 B 行について、以下の表を **`.dandori/specs/<feature>/t
 - 再実行の出力で **skipped / todo が 0 件**であることをランナーのサマリ行で機械確認する。
   skip されたテストはスイートが緑でも実行されていない — B-ID を含むテストの skip は
   偽 ✅ を生む。skipped > 0 なら該当テストを列挙し、B 行に対応するものは ⚠️ 未検証相当として
-  trace.md に反映し §3 の裁定対象に含める。`check-docs.ts trace` も同一行の
+  trace.md に反映し §3 の裁定対象に含める。`dandori-docs.ts trace` も同一行の
   `.skip` / `.todo` / `xit` を T4 として検出するが、外側の `describe.skip` は行 grep では
   見えない — サマリの skipped=0 確認が正
 - **改訂サイクル**（state.yaml に `revision: n`）では `feedback.trace_scope` に従う —
@@ -49,7 +49,7 @@ spec.md の全 B 行について、以下の表を **`.dandori/specs/<feature>/t
     trace.md と strip コミットの rename 差分から再構築する（根拠明記の手動対応付け —
     cleanup 前のループでは処分前の trace.md を上書き前に参照すれば現物で引ける）
 - B 行↔テストの対応付けは、初期トレース表の生成で機械化されている:
-  `node <dandori-repo>/skills/dandori/scripts/check-docs.ts trace <spec.md> <テストディレクトリ...>`
+  `node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts trace <spec.md> <テストディレクトリ...>`
   が B-ID をテストコードから grep（impl の規約でテスト名に B-ID が入っている）して
   表の叩き台を出力する。対応テストが見つからない `unit`/`e2e`/`formal` 行は ⚠️ 候補、
   テスト側の幽霊 B-ID・削除済み B 行への参照も同時に検出される。
@@ -74,7 +74,7 @@ spec.md の全 B 行について、以下の表を **`.dandori/specs/<feature>/t
   委譲呼び出しの除去ミュータントが殺されること（生き残り = 未結線）を実行ベースの
   根拠として併記できる
 - **plan カバレッジ検査を再実行する**
-  （`node <dandori-repo>/skills/dandori/scripts/check-docs.ts plan <spec.md> <plan.md>`）。
+  （`node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts plan <spec.md> <plan.md>`）。
   impl 中に B 行が増減していると plan 策定時の検査結果は古い — 未カバーの B 行
   （どのマイルストーンにも割り当てがない = ゲート漏れの温床）は ⚠️ 相当、
   幽霊参照は ❌ 相当として trace.md に行を足し、§3 の裁定対象に含める

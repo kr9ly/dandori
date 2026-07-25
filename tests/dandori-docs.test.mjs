@@ -1,5 +1,5 @@
 /**
- * check-docs.ts の CLI 境界に対する回帰テスト。
+ * dandori-docs.ts の CLI 境界に対する回帰テスト。
  *
  * テストの単位は **CLI の外部挙動**（引数 → exit code + 出力の指摘 ID 集合 +
  * 機械可読行）に固定してある。内部関数を直接叩かないのは、このスクリプトが
@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 
 const HERE = import.meta.dirname
-const CHECKER = join(HERE, '..', 'skills', 'dandori', 'scripts', 'check-docs.ts')
+const CHECKER = join(HERE, '..', 'skills', 'dandori', 'scripts', 'dandori-docs.ts')
 const FIX = join(HERE, 'fixtures')
 
 /** チェッカーを起動して exit code と出力を取る（exit 1/2 でも throw させない） */
@@ -53,6 +53,32 @@ function scratch(relPath) {
   const dst = join(dir, relPath.split('/').pop())
   copyFileSync(join(FIX, relPath), dst)
   return dst
+}
+
+// ---------------------------------------------------------------------------
+// CLI の外枠 — モード解決と引数不足の報告
+//
+// モード分割（2026-07-25）で各モードから共有定数 USAGE が見えなくなり、引数不足時に
+// ReferenceError で落ちる回帰が出た。当時のテストは正常系と検査対象の異常系しか
+// 覆っておらず、この経路を通っていなかった — 分割の安全網として引数の入口も固定する
+// ---------------------------------------------------------------------------
+
+const ALL_MODES = ['spec', 'plan', 'design', 'trace', 'ledger', 'ledger-append', 'map', 'state', 'residue']
+
+test('cli: モード名なし / 未知のモードは usage を出して exit 2', () => {
+  for (const args of [[], ['unknown-mode']]) {
+    const r = run(...args)
+    assert.equal(r.code, 2, `args=${JSON.stringify(args)} の exit code — 出力:\n${r.out}`)
+    assert.match(r.out, /^usage: node dandori-docs\.ts /, r.out)
+  }
+})
+
+for (const mode of ALL_MODES) {
+  test(`cli: ${mode} — 引数不足は exit 2 で報告する（クラッシュしない）`, () => {
+    const r = run(mode)
+    assert.equal(r.code, 2, `exit code — 出力:\n${r.out}`)
+    assert.doesNotMatch(r.out, /ReferenceError|TypeError|Cannot find module/, `クラッシュしている:\n${r.out}`)
+  })
 }
 
 // ---------------------------------------------------------------------------

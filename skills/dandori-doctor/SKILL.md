@@ -23,7 +23,7 @@ survey と同じ足場系で、フィーチャーに依存しない（プロジ�
 
 | 項目 | 確認内容 | 影響を受ける工程 |
 |------|----------|------------------|
-| チェッカー実行環境 | dandori リポジトリが手元にあるなら **`node --test tests/*.test.mjs`（チェッカーの自己テスト）が緑か** — チェッカーは全工程のゲートを握るため、誤検出がそのままプロセスの空転（escalated 空転・偽の赤）になる。リポジトリがなくスキルだけを配置した環境では `node <dandori-repo>/skills/dandori/scripts/check-docs.ts`（引数なし）が usage を表示して終了するかで代替する。いずれも Node が TS をフラグなしで素実行できるバージョン（22.18+ / 23.6+）が前提 | spec / plan / review / codereview / gate / survey（機械検査全般） |
+| チェッカー実行環境 | dandori リポジトリが手元にあるなら **`node --test tests/*.test.mjs`（チェッカーの自己テスト）が緑か** — チェッカーは全工程のゲートを握るため、誤検出がそのままプロセスの空転（escalated 空転・偽の赤）になる。リポジトリがなくスキルだけを配置した環境では `node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts`（引数なし）が usage を表示して終了するかで代替する。いずれも Node が TS をフラグなしで素実行できるバージョン（22.18+ / 23.6+）が前提 | spec / plan / review / codereview / gate / survey（機械検査全般） |
 | リソースマップ | `.dandori/resources.md` の有無と、下記コマンド類の宣言状況 | 全工程 |
 | unit / e2e | 正準テストコマンドが存在し、現行コードで緑か | impl / codereview / refine / gate |
 | lint / format | 正準コマンドの有無 | refine（機械検査先行） |

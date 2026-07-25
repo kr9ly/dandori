@@ -61,7 +61,7 @@ state.yaml を更新する: `revision: <前回 + 1>`（初出は 2）。done か
 gate 直後の経路では前サイクルの台帳（R/C 行入り）が生きているのでそこへ追記、
 done からの再開では再生成する。形式は review / codereview と同じ台帳
 （`| ID | Rd | 深刻度 | 論点 | 処置 | 根拠・理由 |`）で、**Rd には今回の revision 番号**を書く。
-形式・処置の完全性は `check-docs.ts ledger` が機械検査する（F 系列対応 — 収束判定の
+形式・処置の完全性は `dandori-docs.ts ledger` が機械検査する（F 系列対応 — 収束判定の
 対象外で、完了条件は未処置ゼロ）。
 
 ### 3. トリアージ — 項目ごとの分類と巻き戻し先
@@ -103,7 +103,7 @@ done からの再開では再生成する。形式は review / codereview と同
   識別する目印になる）
 - 編集後は改番検知 + 形式検査を通す:
   `git show HEAD:<spec.md> > /tmp/base.md` →
-  `node <dandori-repo>/skills/dandori/scripts/check-docs.ts spec <spec.md> --baseline /tmp/base.md`。
+  `node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts spec <spec.md> --baseline /tmp/base.md`。
   状態モデルがあれば `check-state-model.ts` も再実行する
 - 改訂版 spec はユーザー確認を得て fix
 
@@ -151,13 +151,13 @@ state.yaml を巻き戻し先に合わせて初期化し、該当工程スキル
     （§4 で spec 改訂済みなら `[spec]`、spec 巻き戻しなら `[]`）
 - **plan.md が現役のまま impl へ巻き戻す場合**（cleanup 前・フルコース）、改訂で追加した
   B 行のマイルストーン割り当てを plan.md に追記する — gate が plan カバレッジ検査を
-  再実行するため、未割り当ての B 行は ⚠️ になる（`check-docs.ts plan` で確認）
+  再実行するため、未割り当ての B 行は ⚠️ になる（`dandori-docs.ts plan` で確認）
 - 再走する工程（巻き戻し先以降）の per-phase セクション（review.rounds /
   impl.milestones_* / codereview / refine / annotate / strip 等）を初期状態に戻す —
   前サイクルの記録は git 履歴が正。sketch は改訂スコープで再トリアージする（UI に触れるか）
 - `feedback.items:`（台帳の F 行数）と `feedback.trace_scope:`（§5 の裁定 —
   strip skip のプロジェクトでは書かない）を記録
-- `node <dandori-repo>/skills/dandori/scripts/check-docs.ts state <state.yaml>` を通す
+- `node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts state <state.yaml>` を通す
 
 以降は通常フローに再合流し、gate → annotate → strip を通ってこの工程（§1 の裁定）に
 戻ってくる。フィーチャーが done で閉じるのは、§1 で「完全に fix」の裁定が出て
@@ -174,6 +174,6 @@ cleanup が完了したときだけ。review-ledger.md の F 行は改訂サイ�
 - **クローズ維持**（done からの再開で取り込みなし）— `phase: done` のまま
   （§3 経由なら却下・保留の spec 還流と revision の巻き戻しを済ませる）
 - **巻き戻し完了** —
-  - 全項目が台帳で処置済み（`check-docs.ts ledger` の未処置ゼロ、却下は理由つき）
+  - 全項目が台帳で処置済み（`dandori-docs.ts ledger` の未処置ゼロ、却下は理由つき）
   - state.yaml: revision 採番済み・phase が巻き戻し先・phases_done とセクションのリセット済み・
-    `check-docs.ts state` グリーン
+    `dandori-docs.ts state` グリーン

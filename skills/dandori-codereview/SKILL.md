@@ -135,7 +135,7 @@ dandori-review と同じ台帳 `.dandori/specs/<feature>/review-ledger.md` を�
 **行の追記は手編集でなくチェッカーの `ledger-append` で行う**（決定的・冪等）:
 
 ```
-node <dandori-repo>/skills/dandori/scripts/check-docs.ts ledger-append <review-ledger.md> \
+node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts ledger-append <review-ledger.md> \
   --prefix C --rd <ラウンド> --rows-stdin <<'JSON'
 [{"index":0,"severity":"major","topic":"論点の一行","action":"","reason":"src/a.ts:10"}]
 JSON
@@ -164,7 +164,7 @@ ID 再採番衝突が構造的に起きなくなる（追記をエージェン�
 ### 収束条件
 
 dandori-review と同じ判定を使う。チェッカー
-（`node <dandori-repo>/skills/dandori/scripts/check-docs.ts ledger <review-ledger.md>`）が
+（`node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts ledger <review-ledger.md>`）が
 C-n 系列のラウンド推移と判定（passed / escalated / 継続）を機械出力する
 （反証破棄の行は生存数から除外され、反証破棄済み論点の再指摘は escalate 材料に数えない）:
 
@@ -205,7 +205,7 @@ workflow は escalated と別の `max_rounds` で返す（混ぜると、収束�
 自制に依存しなくなる。
 
 - args: `specDir`（specs/<feature>）/ `diffCommand` / `gates`（正準コマンド配列）/
-  `checkDocs`（check-docs.ts の実行プレフィックス）、任意で `resources` / `mutationCommand` /
+  `checkDocs`（dandori-docs.ts の実行プレフィックス）、任意で `resources` / `mutationCommand` /
   `maxRounds` / `workRoot` / `models` / `efforts`。JSON オブジェクトで渡す（文字列で届く環境でも
   スクリプト側で JSON.parse に正規化される）
 - `models` / `efforts`: 役割別のモデル・reasoning effort の上書き（役割語彙は

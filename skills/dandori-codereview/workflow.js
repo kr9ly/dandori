@@ -8,7 +8,7 @@
 // 導出する — 新規実行が正しい再開手段。
 export const meta = {
   name: 'dandori-codereview',
-  description: 'dandori codereview 工程の決定的ループ — 入口検査 → 5レーン独立レビュー → 台帳追記 → 指摘ごと反証 → 修正 → check-docs ledger 収束判定',
+  description: 'dandori codereview 工程の決定的ループ — 入口検査 → 5レーン独立レビュー → 台帳追記 → 指摘ごと反証 → 修正 → dandori-docs ledger 収束判定',
   whenToUse: 'dandori-codereview スキル実行時、Workflow が使える環境で決定的な制御フローを機械駆動する。裁定（spec 波及・escalate 後・minor 採否）と state.yaml 更新はメインエージェントに返す。',
 }
 
@@ -25,7 +25,7 @@ export const meta = {
 //                   台帳の worktree 内複製を防ぐ）
 //   diffCommand     (必須) レビュー対象差分の取得コマンド（例: "git diff; git status --porcelain"）
 //   gates           (必須) 正準ゲートコマンドの配列（unit / e2e。resources.md の正準を使う）
-//   checkDocs       (必須) check-docs.ts の実行プレフィックス（例: "node <dandori-repo>/skills/dandori/scripts/check-docs.ts"）
+//   checkDocs       (必須) dandori-docs.ts の実行プレフィックス（例: "node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts"）
 //   resources       (任意) .dandori/resources.md のパス（周辺整合レーンの規約参照用）
 //   mutationCommand (任意) diff スコープ限定のミューテーションテストコマンド
 //   maxRounds       (任意) ラウンド数の暴走バックストップ（既定 6）
@@ -175,7 +175,7 @@ const FINDINGS_SCHEMA = {
 }
 
 // 記録係は「照合係」に縮退している — 台帳への行の書き込みと ID 発番は
-// check-docs ledger-append（決定的・冪等）が行い、エージェントは既存行との同一論点照合だけを返す。
+// dandori-docs ledger-append（決定的・冪等）が行い、エージェントは既存行との同一論点照合だけを返す。
 // エージェントに追記させる設計では、発番済み ID の行が台帳に書かれない書き落ち
 // （2026-07-25 実戦観測: C-2 / C-31 の欠番化）と worktree 内複製への二重書き込みが、
 // プロンプト強化を 2 度重ねても再発した
@@ -389,7 +389,7 @@ ${COMMON_RULES}`,
   },
 }
 
-// 台帳の処置セルは checker（check-docs ledger の L1）が語彙検査する — 語彙外の言い換えや
+// 台帳の処置セルは checker（dandori-docs ledger の L1）が語彙検査する — 語彙外の言い換えや
 // 処置セルへの注記併記は escalated を誘発する（2026-07-23 実戦観測）。台帳を書く全プロンプトに注入する
 const LEDGER_VOCAB = `台帳の処置セルに書いてよいのは「反映済 / 却下 / 保留 / 反証破棄 / 再燃→<ID>」（または空 = 未処置）のみ。
 「対応済」「修正済」等の言い換えや、処置セルへの注記・裁定文の併記は語彙エラーになる —
@@ -414,7 +414,7 @@ ${JSON.stringify(majors.map((f, index) => ({ index, severity: f.severity, title:
 **台帳ファイルは編集しないこと**（読み取りのみ）— 行の追記・ID 発番は後段の決定的コマンドが行う。
 ${LEDGER_VOCAB}`
 
-// 追記は check-docs ledger-append に委ねる（決定的・冪等）— 行の書式・ID 発番・書き先パスが
+// 追記は dandori-docs ledger-append に委ねる（決定的・冪等）— 行の書式・ID 発番・書き先パスが
 // スクリプト側で固定され、エージェントの Edit を経由しない。rows JSON はスクリプトが構築する
 const appendPrompt = (rows, round) => `次のコマンドを**一字一句そのまま**実行し、出力の「[appended] 」で始まる行を
 すべて逐語転記（appended_lines）し、exit code を報告してください。
@@ -478,7 +478,7 @@ ${GATES.map(g => `  - ${g}`).join('\n')}
 ${GATE_PROTOCOL}${workRootNote}`
 
 // markZero: このラウンドが台帳に行を追記しなかった（= 指摘なし）か。マーカー追記は
-// check-docs の --mark-zero-round（決定的・冪等）が行う — エージェントに台帳の自由編集を
+// dandori-docs の --mark-zero-round（決定的・冪等）が行う — エージェントに台帳の自由編集を
 // させない（マーカー追記の Edit が監査改竄と誤検知されブロックされた実戦観測への対策）。
 // ラウンド番号は `auto`（台帳の実ラウンド番号から導出）で渡す — workflow ローカルの
 // 数え上げを渡すと台帳の Rd 系列と食い違うマーカーが打たれ、収束済みなのに escalated に
@@ -551,7 +551,7 @@ async function processFindings(laneKey, findings, round, label) {
     }))
   if (!matched) {
     // 照合係が無応答でも指摘は消さない — 全件を新規扱いで追記に回す（重複行は
-    // check-docs L4 / 収束判定で観測できるが、指摘の消失は回復できない）
+    // dandori-docs L4 / 収束判定で観測できるが、指摘の消失は回復できない）
     log(`${label}: 台帳照合係が無応答 — 指摘 ${majors.length} 件を全件 new として追記に回す`)
   }
   const entries = matched
@@ -643,7 +643,7 @@ if (!setup.gates_green) {
 const startRound = (setup.max_c_round || 0) + 1
 let round = startRound
 let active = Object.keys(LANES)
-// 台帳に C 行が存在するか — 収束判定（check-docs）を呼ぶべきかの判断材料。
+// 台帳に C 行が存在するか — 収束判定（dandori-docs）を呼ぶべきかの判断材料。
 // 再開セッション（過去ラウンドの C 行あり）でも判定を飛ばさないため setup から引き継ぐ
 let cRowsExist = (setup.max_c_round || 0) > 0
 
@@ -695,17 +695,17 @@ while (true) {
   log(`ラウンド ${round}: blocker/major ${verdicts.length} 件 → 反証生存 ${survivors.length} 件（minor 累計 ${minors.length} 件）`)
 
   if (survivors.length === 0) {
-    // 生存ゼロのラウンド = 収束。台帳に C 行があれば check-docs で機械確認する
+    // 生存ゼロのラウンド = 収束。台帳に C 行があれば dandori-docs で機械確認する
     // （過去ラウンド由来の再燃・停滞・形式不備を見逃さないため、再開セッションでも呼ぶ）
     let judge = null
     if (cRowsExist) {
       // このラウンドが行を追記していない（指摘ゼロ / 全て反証済みの再生産）場合、マーカーが
-      // ないと check-docs は最後の行があるラウンドまでしか観測できず、過去の停滞パターン
-      // から escalated を返し続ける。「指摘なし」マーカーの追記は check-docs の
+      // ないと dandori-docs は最後の行があるラウンドまでしか観測できず、過去の停滞パターン
+      // から escalated を返し続ける。「指摘なし」マーカーの追記は dandori-docs の
       // --mark-zero-round に委ねる（決定的・冪等 — 収束判定と同一コマンドで済む）
       judge = await tryAgent(judgePrompt(verdicts.length === 0), { label: '収束判定', phase: `Rd${round} 判定`, schema: JUDGE_SCHEMA, ...role('judge', { model: 'sonnet', effort: 'low' }) })
     }
-    // 完了条件は check-docs の exit 0（形式不備なし）まで含む — 未処置行や欠番を残して
+    // 完了条件は dandori-docs の exit 0（形式不備なし）まで含む — 未処置行や欠番を残して
     // passed を名乗らない
     const clean = !judge || (judgeVerdict(judge) !== 'escalated' && judge.exit_code === 0)
     return {
@@ -740,7 +740,7 @@ while (true) {
     return { status: 'gate_red', detail: fix.gate_output, fixed: fix.fixed, minors, lastRound: round, ledger: LEDGER }
   }
   // fix 報告の完全性クロスチェック — 報告から漏れた指摘は台帳の未処置行として
-  // check-docs（L2）が検出するが、ここでも可視化しておく
+  // dandori-docs（L2）が検出するが、ここでも可視化しておく
   const handledIds = new Set([...(fix.fixed || []), ...(fix.needs_adjudication || [])].map(x => x.id))
   const unhandled = survivors.filter(s => !handledIds.has(s.id))
   if (unhandled.length > 0) {
