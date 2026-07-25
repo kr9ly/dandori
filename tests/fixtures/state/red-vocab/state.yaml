@@ -1,0 +1,11 @@
+feature: red-vocab
+course: medium
+phase: reviewing
+phases_done: [spec, ground]
+revision: 1
+review:
+  rounds: 2
+  status: complete
+progress: 語彙違反の詰め合わせ
+updated: 2026/07/25
+unknown_key: 未知のキー

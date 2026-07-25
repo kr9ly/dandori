@@ -14,9 +14,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, copyFileSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 
 const HERE = import.meta.dirname
 const CHECKER = join(HERE, '..', 'skills', 'dandori', 'scripts', 'check-docs.ts')
@@ -223,6 +223,216 @@ test('spec: 固定単位の乖離マークは指摘ではなく別枠で列挙�
   const r = run('spec', join(FIX, 'spec/red-fields.md'))
   assert.match(r.out, /^## 固定単位の乖離（1 件 — 指摘ではない/m, r.out)
   assert.equal(findings(r.out).乖離, undefined)
+})
+
+// ---------------------------------------------------------------------------
+// state モード — state.yaml の整合検査（Y1〜Y4）。ルーターの再開判定の足場
+// ---------------------------------------------------------------------------
+
+const STATE_CASES = [
+  {
+    name: 'フルコースの整合した state は指摘ゼロ',
+    fixture: 'state/full-feature/state.yaml',
+    code: 0,
+    findings: {},
+  },
+  {
+    name: 'Y1 — course / phase / status の語彙外、revision の下限、日付形式、未知キー',
+    fixture: 'state/red-vocab/state.yaml',
+    code: 1,
+    findings: { Y1: 6, Y3: 1 },
+  },
+  {
+    name: 'Y2 — feature がフィーチャーディレクトリ名と一致しない',
+    fixture: 'state/red-mismatch/state.yaml',
+    code: 1,
+    findings: { Y2: 1 },
+  },
+  {
+    name: 'Y3 — annotate が gate 未通過 / 短縮コースに無い工程 / 完了済み impl のカウンタ不整合',
+    fixture: 'state/red-phase/state.yaml',
+    code: 1,
+    findings: { Y3: 3, Y4: 1 },
+  },
+  {
+    name: 'Y4 — 完了済みフェーズが前提とする成果物の欠落',
+    fixture: 'state/red-artifacts/state.yaml',
+    code: 1,
+    findings: { Y4: 3 },
+  },
+]
+
+for (const c of STATE_CASES) {
+  test(`state: ${c.name}`, () => {
+    const r = run('state', join(FIX, c.fixture))
+    assert.equal(r.code, c.code, `exit code — 出力:\n${r.out}`)
+    assert.deepEqual(findings(r.out), c.findings, `指摘 ID — 出力:\n${r.out}`)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// trace モード — B-ID ↔ テストコードの機械突合（T1〜T4）
+// ---------------------------------------------------------------------------
+
+test('trace: T1〜T4 — 対応テストなし / 幽霊 B-ID / 削除済み参照 / skip されたテスト', () => {
+  const r = run('trace', join(FIX, 'spec/green.md'), join(FIX, 'trace/src'))
+  assert.equal(r.code, 1, r.out)
+  assert.deepEqual(findings(r.out), { T1: 1, T2: 1, T3: 1, T4: 1 }, r.out)
+})
+
+test('trace: 数値開始でないトークン（B-ORDER）は B-ID 参照として扱わない', () => {
+  // フィクスチャ文字列の B-ORDER を幽霊 B-ID と誤検出すると、幽霊の指摘がノイズで埋まる
+  const r = run('trace', join(FIX, 'spec/green.md'), join(FIX, 'trace/src'))
+  assert.doesNotMatch(r.out, /B-ORDER/, r.out)
+})
+
+test('trace: --revision で旧 B 行は回帰扱いになり、改訂行だけがフルトレース対象になる', () => {
+  // strip 済みの改訂サイクルでは旧 B 行の B-ID がテスト名にないため、機械突合が効くのは
+  // 今回の revision の行だけ。旧行に T1 を出すと未検証の山で本命が埋まる
+  const r = run('trace', join(FIX, 'spec/green-rev2.md'), join(FIX, 'trace/src'), '--revision', '2')
+  assert.match(r.out, /^\| B-3 \| e2e \| ✅ 回帰 \|/m, r.out)
+  assert.match(r.out, /^\| B-5 \| unit \| ⚠️ 未検証候補 \|/m, r.out)
+  assert.equal(findings(r.out).T1, 1, `旧行に T1 が出ている:\n${r.out}`)
+})
+
+// ---------------------------------------------------------------------------
+// residue モード — strip の受け入れテスト（RS1〜RS3）
+// ---------------------------------------------------------------------------
+
+test('residue: RS1〜RS3 — B-ID トークン / dandori 言及 / プロセス語彙（指摘 ID・工程ドキュメント参照）', () => {
+  const r = run('residue', join(FIX, 'residue/dirty'))
+  assert.equal(r.code, 1, r.out)
+  assert.deepEqual(findings(r.out), { RS1: 2, RS2: 2, RS3: 4 }, r.out)
+})
+
+test('residue: strip 済みのコードは指摘ゼロ（dandori-ok の機能的依存は除外される）', () => {
+  const r = run('residue', join(FIX, 'residue/clean'))
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /dandori-ok 除外 2 行/, r.out)
+})
+
+test('residue: dandori-ok の除外範囲はマーカー行と直後 1 行だけ', () => {
+  // 2 行以上に及ぶ参照は各行にマーカーが必要 — 範囲を広く取ると剥がし漏れが黙って通る
+  const r = run('residue', join(FIX, 'residue/marker-scope'))
+  assert.deepEqual(findings(r.out), { RS2: 1 }, r.out)
+  assert.match(r.out, /loader\.ts:3/, `除外範囲の外の行が検出されていない:\n${r.out}`)
+})
+
+// ---------------------------------------------------------------------------
+// plan モード — spec ↔ plan の B 行カバレッジ突合（P1〜P4）
+// ---------------------------------------------------------------------------
+
+test('plan: 全 B 行がカバーされたプランは指摘ゼロ（削除済み B 行はカバー対象外）', () => {
+  const r = run('plan', join(FIX, 'spec/green.md'), join(FIX, 'plan/green.md'))
+  assert.equal(r.code, 0, r.out)
+  assert.deepEqual(findings(r.out), {}, r.out)
+})
+
+test('plan: P1〜P4 — 未カバー B 行 / 幽霊参照 / 削除済み参照 / 空マイルストーン', () => {
+  // P1 は「実装されない仕様」の機械検出 — カバー漏れが gate まで生き残るのが最悪の経路
+  const r = run('plan', join(FIX, 'spec/green.md'), join(FIX, 'plan/red.md'))
+  assert.equal(r.code, 1, r.out)
+  assert.deepEqual(findings(r.out), { P1: 2, P2: 1, P3: 1, P4: 1 }, r.out)
+})
+
+// ---------------------------------------------------------------------------
+// design モード — design.md の形式検査と spec との B 行対応突合（D1〜D5）
+// ---------------------------------------------------------------------------
+
+test('design: 正準形式の design は指摘ゼロ', () => {
+  const r = run('design', join(FIX, 'spec/green.md'), join(FIX, 'design/green.md'))
+  assert.equal(r.code, 0, r.out)
+  assert.deepEqual(findings(r.out), {}, r.out)
+})
+
+test('design: D1〜D4 — 必須セクション / 検証マークと証拠形式 / B 行参照整合 / 未対応 B 行', () => {
+  // D2 の「[実行検証済] に再実行可能な証拠がない」は ground の教義の機械化 —
+  // マークだけの主張は検証の主張であって証拠ではない
+  const r = run('design', join(FIX, 'spec/green.md'), join(FIX, 'design/red.md'))
+  assert.equal(r.code, 1, r.out)
+  assert.deepEqual(findings(r.out), { D1: 1, D2: 2, D3: 2, D4: 2 }, r.out)
+})
+
+test('design: D5 — 軸キーの typo と理由なし [散在]（状態モデルつき spec のみ）', () => {
+  const r = run('design', join(FIX, 'spec/green-model.md'), join(FIX, 'design/red-axes.md'))
+  assert.equal(r.code, 1, r.out)
+  assert.deepEqual(findings(r.out), { D5: 2 }, r.out)
+})
+
+test('design: D5 — 状態モデルがあるのに軸対応節がない design を検出する', () => {
+  const r = run('design', join(FIX, 'spec/green-model.md'), join(FIX, 'design/green.md'))
+  assert.deepEqual(findings(r.out), { D5: 1 }, r.out)
+})
+
+test('design: 状態モデルのない spec では軸対応節を要求しない', () => {
+  // D5 を無条件に要求すると、状態モデルを使わないプロジェクトで常に赤になる
+  const r = run('design', join(FIX, 'spec/green.md'), join(FIX, 'design/green.md'))
+  assert.equal(findings(r.out).D5, undefined, r.out)
+})
+
+// ---------------------------------------------------------------------------
+// map モード — survey verify の証拠アンカー死活検査（V1〜V5）
+// ---------------------------------------------------------------------------
+
+test('map: V1 — generated-at ヘッダの欠落', () => {
+  const r = run('map', join(FIX, 'map/red-no-header.md'))
+  assert.equal(r.code, 1, r.out)
+  assert.deepEqual(findings(r.out), { V1: 1 }, r.out)
+})
+
+test('map: V1 + V2 + V4 + V5 — 解決不能な hash / アンカー先の消滅・行範囲外・シンボルなし / 根拠なし / 等級なし', () => {
+  // 有効なシンボルアンカー（confirmOrder）と「未確認」明記の主張は指摘に上げない
+  const r = run('map', join(FIX, 'map/red-anchors.md'))
+  assert.equal(r.code, 1, r.out)
+  assert.deepEqual(findings(r.out), { V1: 1, V2: 3, V4: 1, V5: 2 }, r.out)
+})
+
+test('map: V3 — generated-at 以降に変更されたアンカー先だけを再検証候補に挙げる', () => {
+  // 一時 git リポジトリを組んで決定的に検証する（このリポジトリの履歴に依存させない）。
+  // 「アンカー先が変わった = 腐った」ではないので、V3 は再検証候補として挙がるのが正
+  const repo = mkdtempSync(join(tmpdir(), 'dandori-map-'))
+  const git = (...a) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' })
+  const write = (rel, body) => {
+    mkdirSync(dirname(join(repo, rel)), { recursive: true })
+    writeFileSync(join(repo, rel), body)
+  }
+  git('init', '-q')
+  git('config', 'user.email', 'test@example.com')
+  git('config', 'user.name', 'test')
+  write('src/order.ts', "export const status = 'draft'\n")
+  write('src/stock.ts', 'export const stock = 0\n')
+  git('add', '-A')
+  git('commit', '-qm', 'base')
+  const base = git('rev-parse', 'HEAD').trim()
+  write('.dandori/map/states.md', [
+    '# 状態',
+    '',
+    `<!-- generated-at: ${base} / 2026-07-25 -->`,
+    '',
+    '## 状態一覧',
+    '- 注文の初期状態は draft — 根拠: `src/order.ts:1` [読解のみ]',
+    '- 在庫の初期値は 0 — 根拠: `src/stock.ts:1` [読解のみ]',
+    '',
+  ].join('\n'))
+  git('add', '-A')
+  git('commit', '-qm', 'map')
+  const mapPath = join(repo, '.dandori/map/states.md')
+
+  // アンカー先が無変更なら指摘ゼロ
+  const before = run('map', mapPath)
+  assert.equal(before.code, 0, before.out)
+
+  // order.ts だけを変更 → その主張だけが V3 に挙がる（stock.ts の主張は挙がらない）
+  write('src/order.ts', "export const status = 'confirmed'\n")
+  git('commit', '-qam', 'change order')
+  const after = run('map', mapPath)
+  assert.deepEqual(findings(after.out), { V3: 1 }, after.out)
+  assert.match(after.out, /src\/order\.ts:1/, after.out)
+  assert.doesNotMatch(after.out, /src\/stock\.ts/, `無変更のアンカーが挙がっている:\n${after.out}`)
+
+  // --root は map の所在から離れた場所から検査するための明示指定（worktree 並列レーン）
+  const rooted = run('map', mapPath, '--root', repo)
+  assert.deepEqual(findings(rooted.out), { V3: 1 }, rooted.out)
 })
 
 test('ledger-append: 追記した台帳が ledger モードの形式検査を通る', () => {

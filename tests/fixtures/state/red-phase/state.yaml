@@ -1,0 +1,12 @@
+feature: red-phase
+course: short
+phase: annotate
+phases_done: [spec, review, impl]
+review:
+  rounds: 1
+  status: passed
+impl:
+  milestones_done: 1
+  milestones_total: 4
+progress: 短縮コースに review があり、gate 未通過なのに annotate
+updated: 2026-07-25

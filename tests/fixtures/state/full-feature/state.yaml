@@ -1,0 +1,18 @@
+feature: full-feature
+course: full
+phase: impl
+phases_done: [spec, ground, review, spike, plan]
+sketch:
+  status: skipped
+  reason: UI に触れない
+review:
+  rounds: 2
+  status: passed
+spike:
+  status: skipped
+  reason: 全前提が実行検証済み
+impl:
+  milestones_done: 2
+  milestones_total: 5
+progress: M3 の実装中
+updated: 2026-07-25
