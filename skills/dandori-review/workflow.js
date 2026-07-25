@@ -309,40 +309,98 @@ const SETUP_SCHEMA = {
 // レビューアに渡すのはパスと観点だけ。内容の要約・言い換え・背景説明・仮説・弁解は
 // テンプレートに存在しない = 混入できない。台帳のパスも渡さない。
 
-const reviewerPrompt = (hasStateModel) => `あなたは実装ドキュメントの独立レビューアです。以下の2ファイルを読み、批評してください。
-- ${SPEC}
-- ${DESIGN}
-
-観点:
+// 観点 × 照合先で分割したレーンを並列に走らせる。1 体に全観点を持たせる構成では、
+// 毎ラウンド「そのとき目に入った場所」から指摘が出て直列ラウンド数が伸びた（実測: 収束まで
+// 4〜10+ ラウンド、生存件数は単調減少せず新規指摘が湧き続ける = 網羅ではなくサンプリングの挙動）。
+// レーンごとの問いを狭くし、1 ラウンドの発見量を上げて直列ステップを削る — codereview と同じ構造。
+const LANES = {
+  requirements: {
+    label: '要件充足・整合性',
+    docs: [SPEC, DESIGN],
+    question: `観点（この 2 つに集中し、他の観点は他レーンに任せること）:
 1. 要件不達 — この設計を実装しても spec のゴールを満たさない箇所はないか
-2. エラーパス欠落 — 状態変数の洗い出しに漏れはないか。spec の異常系 B 行で
-   カバーされないエラーパスを、実際のコードから逆算して探せ
-3. 前提の誤り — design.md の「土台」「不変条件」の主張を鵜呑みにせず、
-   コードベースを自分で読んで検証せよ。特に [読解のみ] マークの前提を重点的に疑え。
-   [実行検証済] も証拠形式を監査せよ: 実行コマンドと観測結果の併記がないもの、
-   コマンドを再実行して主張どおりにならないものは、マークの降格を指摘せよ
-4. 整合性 — spec と design の間の矛盾、design が触ると言っていない箇所への隠れた影響
-${REVIEW_DOCS.length > 0 ? `5. 規約・既知パターンとの照合 — 以下のドキュメントを読み、違反・既知の失敗パターンへの該当を探せ:
-${REVIEW_DOCS.map(p => `   - ${p}`).join('\n')}
-` : ''}${hasStateModel ? `
-spec.md には状態モデル（dandori-state-model ブロック）がある。組み合わせ網羅・交点カバーは
-チェッカーが機械的に担保しているため、モデルが原理的に検出できない型に集中すること:
+2. 整合性 — spec と design の間の矛盾、design が触ると言っていない箇所への隠れた影響
+
+走査は全数で行うこと: spec のゴールの各条件 → それを実現する design のエントリ、
+design の改変箇所・新規実装の各エントリ → その波及先。`,
+  },
+  errorpath: {
+    label: 'エラーパス',
+    // design を渡さない — 設計の言い分を知ると「design に書いてあるから大丈夫」の
+    // バイアスが入る。エラーパスは spec の異常系とコードの現物から逆算するのが正
+    docs: [SPEC],
+    question: `観点: エラーパス欠落。状態変数の洗い出しに漏れはないか。spec の異常系 B 行で
+カバーされないエラーパスを、**実際のコードから逆算して**探せ。
+
+design.md は渡していない — 設計の言い分を知らない目として、コードに実在する失敗経路
+（例外・早期 return・外部呼び出しの失敗・トランザクション境界・並行更新）を全数列挙し、
+それぞれに対応する B 行があるかを spec 側と突合すること。`,
+  },
+  grounding: {
+    label: '前提の監査',
+    // spec を渡さない — 前提の真偽はコードとの照合で決まる。仕様を知ると
+    // 「仕様どおりだから前提も正しいはず」の追認が入る
+    docs: [DESIGN],
+    question: `観点: 前提の誤り。design.md の「土台」「不変条件」の主張を鵜呑みにせず、
+コードベースを自分で読んで（可能なら動かして）検証せよ。
+
+- 特に **[読解のみ]** マークの前提を重点的に疑え
+- **[実行検証済]** は証拠形式を監査せよ: 実行コマンドと観測結果の併記がないもの、
+  コマンドを再実行して主張どおりにならないものは、マークの降格を指摘せよ
+- 土台・不変条件は**全エントリ**を走査すること
+
+spec.md は渡していない — 前提の真偽は仕様ではなくコードとの照合で決まる。`,
+  },
+  partition: {
+    label: '同値分割',
+    docs: [SPEC],
+    question: `観点: 同値分割の監査（技法名を手がかりに系統的に探すこと）。
+spec の Given の値域（状態モデルがあれば各軸の値域）について:
+
+- **クラス漏れ**: どのクラスにも属さない入力値（「その他」に落ちる値）の挙動が宣言されているか
+- **クラス内非一様性**: クラス内の具体値で Then が変わる反例を探せ。特に**多重度の罠** —
+  「該当データが複数あるとき」に複数候補から 1 件を選ぶ処理（.first()、タイブレーク）は
+  選択順序が観測可能な仕様であり、単数クラスと同値ではない
+- **境界値**: 0/1/複数・丸め境界・日付境界・空文字/null/欠落の 3 態が Given に現れているか`,
+  },
+  model: {
+    label: 'モデル監査',
+    docs: [SPEC],
+    requiresModel: true,
+    question: `観点: 状態モデルの監査。組み合わせ網羅・交点カバーはチェッカーが機械的に
+担保しているため、**モデルが原理的に検出できない型**と**裁定のふり**に集中すること。
+
+モデルが検出できない型:
 軸内の逐次連鎖の発見 / 分類述語の値域の穴 / 未発見の状態変数 /
 値内部のセマンティクス（照合条件の非対称等）/ エラー優先順位の導出。
 
-各軸の値域を同値分割として監査すること:
-- クラス漏れ: どのクラスにも属さない入力値（「その他」に落ちる値）の挙動が宣言されているか
-- クラス内非一様性: クラス内の具体値で Then が変わる反例を探せ。特に多重度の罠 —
-  「該当データが複数あるとき」に複数候補から 1 件を選ぶ処理（.first()、タイブレーク）は
-  選択順序が観測可能な仕様であり、単数クラスと同値ではない
-
-さらに直交宣言の監査を行うこと。状態モデルの orthogonal / orthogonal_groups の各宣言について:
+直交宣言の監査（orthogonal / orthogonal_groups の各宣言について）— チェッカーが強制するのは
+裁定の存在であって正しさではないため、ここが唯一の第三者検査点になる:
 - reason が spec 本文から実際に導けるか検証せよ。本文に根拠のない reason は
   それ自体を指摘せよ（major — 裁定のふりの疑い。ground 送りへの差し戻しを提案）
 - 反例となる交点を探せ: その 2 軸の値の組み合わせで挙動が変わるケースを、
   spec の Then の散文（「〜の場合のみ」「〜は除外」）とコードの両方から探すこと。
-  見つかれば依存宣言への昇格 + 交点 B 行の追加を指摘せよ（blocker）
-` : ''}
+  見つかれば依存宣言への昇格 + 交点 B 行の追加を指摘せよ（blocker）`,
+  },
+  conventions: {
+    label: '規約・既知パターン照合',
+    docs: [SPEC, DESIGN],
+    requiresDocs: true,
+    question: `観点: 規約・既知の失敗パターンとの照合。以下のドキュメントを読み、
+spec / design が違反しているもの・既知の失敗パターンに該当するものを探せ:
+${REVIEW_DOCS.map(p => `- ${p}`).join('\n')}
+
+内容の要約は渡していない — 自分で読んで、該当箇所を spec / design 側と突合すること。`,
+  },
+}
+
+// レビューアに渡すのはパスと観点だけ。内容の要約・言い換え・背景説明・仮説・弁解は
+// テンプレートに存在しない = 混入できない。台帳のパスも渡さない
+const lanePrompt = (lane) => `あなたは実装ドキュメントの独立レビューアです。以下を読み、批評してください。
+${lane.docs.map(p => `- ${p}`).join('\n')}
+
+${lane.question}
+
 各指摘に深刻度を付けること:
 - blocker: 要件を満たさない実装になる / 前提が事実と異なる
 - major: エラーパス・状態変数の欠落、不変条件の見落とし
@@ -351,13 +409,22 @@ spec.md には状態モデル（dandori-state-model ブロック）がある。�
 ルール（あなたは発見係 — 指摘の白黒は後段の独立反証フェーズが付ける）:
 - 見落としは反証フェーズでは回復できないが、偽陽性は反証フェーズが破棄できる。
   疑いは自己検閲せず列挙すること。「確信が持てないから黙る」は禁止
-- 照合対象をまず全数列挙し、1 件ずつ疑いを探すこと（design の土台・不変条件は全エントリ、
-  spec の B 行は全行）。目についた 1 件で走査を止めない
+- 照合対象をまず全数列挙し、1 件ずつ疑いを探すこと。目についた 1 件で走査を止めない
 - 各指摘に疑いの根拠（ファイル:行）と、可能なら「何を確認すれば白黒つくか」（check）を付けること
 - 深刻度は「指摘が真だった場合」の深刻度で付ける。確信度で下げない
 - minor だけは反証フェーズを通らずユーザーに直接届くため、確信のあるもののみ報告すること
+- **自分のレーンの観点に集中すること**。他観点の疑いが目に入っても深追いしない
+  （並列の別レーンが同じ spec / design を別の観点で走査している）
 
 コードベースへの読み取りアクセスがあります。修正は行わず、指摘の列挙だけを返すこと。${workRootNote}`
+
+// このラウンドで走らせるレーン。状態モデル・参照ドキュメントの有無で増減する
+const activeLanes = (hasStateModel) => Object.keys(LANES).filter(k => {
+  const lane = LANES[k]
+  if (lane.requiresModel && !hasStateModel) return false
+  if (lane.requiresDocs && REVIEW_DOCS.length === 0) return false
+  return true
+})
 
 // 台帳の処置セルは checker（dandori-docs ledger の L1）が語彙検査する — 語彙外の言い換えや
 // 処置セルへの注記併記は escalated を誘発する（2026-07-23 実戦観測）。台帳を書く全プロンプトに注入する
@@ -552,18 +619,32 @@ async function recordFindings(findings, round) {
   return { entries, idByIndex }
 }
 
-while (true) {
-  log(`ラウンド ${round}: 独立レビューア起動（前ラウンドの記憶なし・台帳は渡さない）`)
-
-  // 1. 独立レビュー — レビューアのモデルはセッション継承（この工程の品質の源泉のため
-  //    Sonnet に固定しない。codereview のレーンとは違い SKILL に「Sonnet で足りる」の宣言がない）
-  const review = await tryAgent(reviewerPrompt(setup.has_state_model), {
-    label: `レビューア Rd${round}`, phase: `Rd${round} レビュー`, schema: FINDINGS_SCHEMA, ...role('finder'),
+// 1 レーンを走らせる。無応答は空配列に縮退させ、他レーンの発見は捨てない
+async function runLane(key, round) {
+  const lane = LANES[key]
+  const r = await tryAgent(lanePrompt(lane), {
+    label: `レーン:${lane.label}`, phase: `Rd${round} レビュー`, schema: FINDINGS_SCHEMA,
+    // レーンのモデルはセッション継承（仕様・設計の批評はこの工程の品質の源泉）
+    ...role('finder'),
   })
-  if (!review) {
-    return { status: 'escalated', reason: 'レビューアが結果を返さなかった — メインで再起動を判断', minors, lastRound: round, ledger: LEDGER }
+  if (!r) {
+    log(`ラウンド ${round}: レーン「${lane.label}」が無応答 — このレーンの発見は 0 件として続行`)
+    return []
   }
-  const findings = review.findings
+  return r.findings || []
+}
+
+while (true) {
+  const lanes = activeLanes(setup.has_state_model)
+  log(`ラウンド ${round}: 独立レビューア ${lanes.length} レーン並列起動（前ラウンドの記憶なし・台帳は渡さない）`)
+
+  // 1. 観点別レーンを並列に走らせる。全レーン無応答だけを異常として扱う
+  const perLane = await parallel(lanes.map(k => () => runLane(k, round)))
+  if (perLane.every(v => !v || v.length === 0) && perLane.filter(Boolean).length === 0) {
+    return { status: 'escalated', reason: '全レーンが結果を返さなかった — メインで再起動を判断', minors, lastRound: round, ledger: LEDGER }
+  }
+  const findings = perLane.filter(Boolean).flat()
+  log(`ラウンド ${round}: レーン別の発見 — ${lanes.map((k, i) => `${LANES[k].label}:${(perLane[i] || []).length}`).join(' / ')}`)
   const majors = findings.filter(f => f.severity !== 'minor')
   log(`ラウンド ${round}: 指摘 ${findings.length} 件（blocker/major ${majors.length} / minor ${findings.length - majors.length}）`)
 
