@@ -318,6 +318,9 @@ node --test tests/*.test.mjs
 - [docs/appendix-re-agile.md](docs/appendix-re-agile.md) — 再・アジャイル
   ソフトウェア開発宣言。原典のアンチテーゼ（秤にかけて片方を選ぶ）に対する
   ジンテーゼ（両方を取る）として、dandori の価値観を宣言の形に凝縮
+- [docs/observations.md](docs/observations.md) — 実戦観測ログ。各 SKILL の規約が
+  どの事故から来たかの記録。工程の実行時には読まない（規約と理由は SKILL 本文にある）—
+  規約を変えたい・緩めたいときに「なぜこの縛りがあるのか」を引く先
 - [docs/philosophy.md](docs/philosophy.md) — 理論的背景。ATDD / V字モデル /
   correct by construction との系譜、既存スペック駆動ツールとの差分、
   なぜエージェント時代にこのプロセスが経済的に成立するのか、

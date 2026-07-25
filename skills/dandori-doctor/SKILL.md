@@ -27,7 +27,7 @@ survey と同じ足場系で、フィーチャーに依存しない（プロジ�
 | リソースマップ | `.dandori/resources.md` の有無と、下記コマンド類の宣言状況 | 全工程 |
 | unit / e2e | 正準テストコマンドが存在し、現行コードで緑か | impl / codereview / refine / gate |
 | lint / format | 正準コマンドの有無 | refine（機械検査先行） |
-| formatter の .dandori 侵食 | プロジェクトの formatter（`--fix` つき check 等）が `.dandori/**/*.md` を書き換えないか。markdown の `_` / `*` を強調として正規化する formatter は、軸キー（`c_init` → `c*init`）や台帳の軸値表記（`aco_*` → `a*cart`）を破壊し、チェッカーの typo 誤検出・escalated 誤駆動を生む（ec-replace で 3 例実測）。**probe で実際に確かめる**: `.dandori/` 直下に `_pair_ c_key` を含む一時 md を置き、formatter を実行して無傷か確認 → 破壊されるなら ignore 設定（prettier 系は `.prettierignore` に `.dandori/`、oxfmt は `.prettierignore` を尊重）を整備提案 | spec / ground / review / codereview（.dandori 配下の全ドキュメント） |
+| formatter の .dandori 侵食 | プロジェクトの formatter（`--fix` つき check 等）が `.dandori/**/*.md` を書き換えないか。markdown の `_` / `*` を強調として正規化する formatter は、軸キー（`c_init` → `c*init`）や台帳の軸値表記（`aco_*` → `a*cart`）を破壊し、チェッカーの typo 誤検出・escalated 誤駆動を生む。**probe で実際に確かめる**: `.dandori/` 直下に `_pair_ c_key` を含む一時 md を置き、formatter を実行して無傷か確認 → 破壊されるなら ignore 設定（prettier 系は `.prettierignore` に `.dandori/`、oxfmt は `.prettierignore` を尊重）を整備提案 | spec / ground / review / codereview（.dandori 配下の全ドキュメント） |
 | ミューテーションテスト | 言語に対応するツール（TS: Stryker, JVM: pitest, Python: mutmut, Rust: cargo-mutants 等）の導入状況と diff スコープ実行の可否 | codereview（機械検査先行） |
 | B-ID 命名規約 | 既存テストにゲートタグ（B-ID）入りの命名が浸透しているか grep で確認 | gate（機械トレース） |
 | デザイン指示の参照手段 | Figma エクスポート・デザインスペック・画像等を、エージェントが読める形で取得できるか（UI を持つプロジェクトのみ） | sketch |

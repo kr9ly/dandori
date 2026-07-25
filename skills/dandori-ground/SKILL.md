@@ -140,7 +140,7 @@ spike はスキップ可能 — その旨を design.md に明記する。
 design.md を作成したら形式検査を実行し、exit 0 にする:
 `node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts design <spec.md> <design.md>`
 （必須セクション・検証マークの有無と証拠形式・B 行対応の突合 — 未対応 B 行や
-幽霊参照を機械検出する）。その上で state.yaml を更新する。この工程にユーザー壁打ちは不要 — 
+幽霊参照を機械検出する）。その上で state.yaml を更新する。この工程にユーザー壁打ちは不要 —
 成果物は次工程の dandori-review が第三者検証する。
 
 ## design.md 形式（正準定義）
@@ -176,7 +176,7 @@ design.md を作成したら形式検査を実行し、exit 0 にする:
 2. ...
 
 ## 発見ログ
-<!-- 以降の全工程（spike, impl）で発見した仕様と現実のズレをここに追記する。 -->
+<!-- 以降の全工程（spike, impl）で発見した仕様と現実のズレをここに追記する。-->
 <!-- 形式: - [日付/工程] 発見内容 → 対応（design修正 / spec要修正 / 影響なし） -->
 ```
 
