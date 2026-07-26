@@ -110,4 +110,4 @@ fixture 語彙に「**基準軌道 + 割り込みクラス k で中断**」と�
 - appendix-state-map.md: プラットフォームカタログの置き場と ref: 規約
 - dandori-ground SKILL.md: 構造的直交の検証手順
 - dandori-impl テスト規約: 軌道差分 fixture（virtual time / プロセス死シミュレーション）
-- philosophy.md §11: 成立したら「R の軌道拡張」として一段落
+- philosophy.md §12: 成立したら「R の軌道拡張」として一段落

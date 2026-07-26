@@ -53,7 +53,7 @@ export function run(argvRest: string[]): void {
     }
   })
 
-  const FULL_ORDER = ['spec', 'sketch', 'ground', 'review', 'spike', 'plan', 'impl', 'codereview', 'refine', 'gate', 'annotate', 'strip', 'cleanup']
+  const FULL_ORDER = ['spec', 'sketch', 'ground', 'review', 'spike', 'outline', 'plan', 'impl', 'codereview', 'refine', 'gate', 'annotate', 'strip', 'cleanup']
   const SHORT_PHASES = new Set(['spec', 'sketch', 'impl', 'codereview', 'refine', 'gate', 'annotate', 'strip', 'cleanup', 'feedback']) // sketch/codereview/refine は短縮でも任意実施可。annotate/strip/feedback は両コース共通
   // feedback は線形順序の外（done からの継続改善入口）— phases_done には入らない
   const PHASE_VOCAB = new Set([...FULL_ORDER, 'done', 'feedback'])
@@ -63,7 +63,7 @@ export function run(argvRest: string[]): void {
     typeof top[k] === 'object' ? top[k] as Record<string, string> : {}
 
   // Y1: 語彙・形式
-  const KNOWN_TOP = new Set(['feature', 'course', 'phase', 'phases_done', 'revision', 'sketch', 'review', 'spike', 'impl', 'codereview', 'refine', 'annotate', 'strip', 'cleanup', 'feedback', 'progress', 'updated'])
+  const KNOWN_TOP = new Set(['feature', 'course', 'phase', 'phases_done', 'revision', 'sketch', 'review', 'spike', 'outline', 'impl', 'codereview', 'refine', 'annotate', 'strip', 'cleanup', 'feedback', 'progress', 'updated'])
   for (const k of Object.keys(top)) {
     if (!KNOWN_TOP.has(k)) findings.push({ check: 'Y1:語彙・形式', detail: `未知のトップレベルキー: ${k}（正準定義は dandori ルーターの SKILL.md）` })
   }
@@ -88,6 +88,7 @@ export function run(argvRest: string[]): void {
     sketch: new Set(['pending', 'done', 'skipped']),
     review: new Set(['in_progress', 'passed', 'escalated']),
     spike: new Set(['pending', 'done', 'skipped']),
+    outline: new Set(['pending', 'done', 'skipped']),
     codereview: new Set(['in_progress', 'passed', 'escalated', 'skipped']),
     refine: new Set(['pending', 'done', 'skipped']),
     annotate: new Set(['pending', 'done', 'skipped']),
@@ -195,6 +196,7 @@ export function run(argvRest: string[]): void {
     ['sketch', ['done', 'skipped']],
     ['review', ['passed', 'escalated']],
     ['spike', ['done', 'skipped']],
+    ['outline', ['done', 'skipped']],
     ['codereview', ['passed', 'escalated', 'skipped']],
     ['refine', ['done', 'skipped']],
     ['annotate', ['done', 'skipped']],
@@ -235,9 +237,12 @@ export function run(argvRest: string[]): void {
         findings.push({ check: 'Y4:成果物整合', detail: `phases_done に ${p} があるのに ${file} がない（${why}）` })
       }
     }
-    // sketch は skipped でも phases_done に入りうるので、status が skipped でない場合のみ成果物を要求する
+    // sketch / outline は skipped でも phases_done に入りうるので、status が skipped でない場合のみ成果物を要求する
     if (phasesDone.includes('sketch') && section('sketch').status !== 'skipped' && !exists('sketch.md')) {
       findings.push({ check: 'Y4:成果物整合', detail: 'phases_done に sketch があるのに sketch.md がない（sketch 完了の成果物 — skipped なら sketch.status に記録する）' })
+    }
+    if (phasesDone.includes('outline') && section('outline').status !== 'skipped' && !exists('outline.md')) {
+      findings.push({ check: 'Y4:成果物整合', detail: 'phases_done に outline があるのに outline.md がない（outline 完了の成果物 — skipped なら outline.status に記録する）' })
     }
     // strip は trace.md を B 行↔テスト対応の作業リストとして使い、cleanup が処分する（処分は cleanup の最後）
     if ((phase === 'strip' || phase === 'cleanup') && !exists('trace.md')) {
@@ -249,6 +254,7 @@ export function run(argvRest: string[]): void {
     for (const [file, hint] of [
       ['spec.md', '.dandori/records.md の retain 宣言で意図的に残すなら無視してよい'],
       ['sketch.md', 'アーカイブ方針で意図的に残すなら無視してよい'],
+      ['outline.md', 'アーカイブ方針で意図的に残すなら無視してよい'],
       ['plan.md', 'アーカイブ方針で意図的に残すなら無視してよい'],
       ['trace.md', 'アーカイブ方針で意図的に残すなら無視してよい'],
       ['review-ledger.md', 'アーカイブ方針で意図的に残すなら無視してよい'],

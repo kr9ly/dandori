@@ -1,7 +1,7 @@
 /**
  * dandori 正準ドキュメントの横断ツール。
  *
- * 各 SKILL.md の「正準定義」に対する形式検査（spec / plan / design / ledger / state / map）と、
+ * 各 SKILL.md の「正準定義」に対する形式検査（spec / plan / design / outline / ledger / state / map）と、
  * 決定的な生成・書き込み（trace の初期トレース表生成、ledger-append の行追記）、
  * ストリップの受け入れ検査（residue）をモード引数で切り替える。名前が check でないのは、
  * 検査だけでなく生成・追記を含むため — エージェントに任せると壊れる決定的作業をここに集める。
@@ -18,6 +18,7 @@
  *     （fix 済み spec を再編集したとき: git show HEAD:<path> > /tmp/base.md で取り出す）
  *   node dandori-docs.ts plan <spec.md> <plan.md>
  *   node dandori-docs.ts design <spec.md> <design.md>
+ *   node dandori-docs.ts outline <spec.md> <design.md> <outline.md>
  *   node dandori-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...> [--revision <n>] [--scope <優先ディレクトリ>...]
  *   node dandori-docs.ts ledger <review-ledger.md> [--mark-zero-round <R|C> <rd|auto>]
  *   node dandori-docs.ts ledger-append <review-ledger.md> --prefix <R|C|F> --rd <n> --rows-stdin <<'JSON' ... JSON
@@ -39,6 +40,7 @@ import { USAGE } from './docs/usage.ts'
 import * as specMode from './docs/modes/spec.ts'
 import * as planMode from './docs/modes/plan.ts'
 import * as designMode from './docs/modes/design.ts'
+import * as outlineMode from './docs/modes/outline.ts'
 import * as traceMode from './docs/modes/trace.ts'
 import * as ledgerMode from './docs/modes/ledger.ts'
 import * as ledgerAppendMode from './docs/modes/ledger-append.ts'
@@ -53,6 +55,7 @@ const RUNNERS: Record<string, (argvRest: string[]) => void> = {
   spec: specMode.run,
   plan: planMode.run,
   design: designMode.run,
+  outline: outlineMode.run,
   trace: traceMode.run,
   ledger: ledgerMode.run,
   'ledger-append': ledgerAppendMode.run,

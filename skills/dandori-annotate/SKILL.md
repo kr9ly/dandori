@@ -25,7 +25,7 @@ gate 直後・feedback（外部レビューの安定点）の前に行う — �
 ## 入口条件
 
 - state.yaml: `phase: annotate`（gate 通過・コミット済み）
-- 処分予定ドキュメント（design.md / review-ledger.md / sketch.md）が1つ以上存在する
+- 処分予定ドキュメント（design.md / outline.md / review-ledger.md / sketch.md）が1つ以上存在する
   — 1つも無ければ「スキップ」へ
 
 ## 手順
@@ -39,6 +39,7 @@ gate 直後・feedback（外部レビューの安定点）の前に行う — �
 | design.md「不変条件」 | 変えてはいけない理由がコード側から自明でないもの |
 | design.md「発見ログ」 | 仕様と現実のズレの発見 — 「一見バグ・冗長に見えるが意図的」型の対応 |
 | design.md「土台/改変箇所」 | 採らなかった選択肢（別 API・別方式を検討して棄てた記録） |
+| outline.md「論点と裁定」 | 採らなかったインターフェース案・責務配置 — 「なぜここで分けたか / なぜ統合しなかったか」は実装コードから復元できない典型 |
 | review-ledger.md の却下行 | 「こうすべきでは？」への反証・裁定理由 — 将来のレビューアも同じ指摘をする |
 | sketch.md の不可侵領域 | 「触ってよさそうに見えるが触ってはいけない」UI コードがあれば |
 | spec.md | スコープ外の裁定注記、取り消し線 B 行、状態モデルの直交裁定、テスト設計の骨格、未解決事項の残存項目 |
@@ -101,8 +102,8 @@ state.yaml を更新して dandori-strip へ:
 ## スキップ
 
 既定運用（tombstone）では spec.md が常に候補源のためスキップしない。
-`方式: retain` のプロジェクトで、処分対象ドキュメント（design.md / review-ledger.md /
-sketch.md）が**1つも存在しない**場合のみ `annotate.status: skipped`（理由つき）として
+`方式: retain` のプロジェクトで、処分対象ドキュメント（design.md / outline.md /
+review-ledger.md / sketch.md）が**1つも存在しない**場合のみ `annotate.status: skipped`（理由つき）として
 strip へ進む。候補を走査した結果ゼロだった場合は skip ではなく `done`（annotated: 0）—
 「消える判断は無い」と確認した事実に価値がある。
 

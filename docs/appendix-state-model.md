@@ -9,7 +9,7 @@ appendix-formal.md と同じく、条件に引っかかったときに開く参�
 レビュー指摘（R4 blocker-2 型）のバックテスト完全ヒット。
 
 このモデルの各宣言はコード側の性質 **DRIVE**（README「仕様とコードの構造対応」/
-philosophy §11）の執行装置でもある — 軸対応 = D 直交性、`partition_of:` = E 網羅性、
+philosophy §12）の執行装置でもある — 軸対応 = D 直交性、`partition_of:` = E 網羅性、
 `fixture:` = R 再現性、Gate 乖離マーク = I 独立性。
 
 ## 発動条件

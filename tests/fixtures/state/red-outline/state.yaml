@@ -1,0 +1,8 @@
+feature: red-outline
+course: short
+phase: impl
+phases_done: [spec, outline]
+outline:
+  status: in_progress
+progress: 短縮コースに outline があり、done 扱いなのに成果物がなく、status も語彙外
+updated: 2026-07-25

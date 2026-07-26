@@ -11,7 +11,7 @@ dandori は「段取り八分・仕事二分」— 実装前の仕様策定・�
 ## プロセス全体像
 
 ```
-フルコース:   dandori-spec → (dandori-sketch) → dandori-ground → dandori-review → (dandori-spike) → dandori-plan → dandori-impl → dandori-codereview → dandori-refine → dandori-gate → dandori-annotate → dandori-strip → dandori-feedback
+フルコース:   dandori-spec → (dandori-sketch) → dandori-ground → dandori-review → (dandori-spike) → (dandori-outline) → dandori-plan → dandori-impl → dandori-codereview → dandori-refine → dandori-gate → dandori-annotate → dandori-strip → dandori-feedback
 短縮コース:   dandori-spec(短縮) → dandori-impl → dandori-gate → dandori-annotate → dandori-strip → dandori-feedback
 継続改善:     dandori-feedback が裁定点 — 結論の取込（spec | ground | impl に巻き戻し → 再走 → gate → annotate → strip → feedback）/ 結論待ちの待機 / 完全 fix の裁定 → dandori-cleanup → done
 ```
@@ -35,6 +35,7 @@ dandori-feedback で再開できる（ドキュメント処分済みのため sp
 ├── spec.md         # 要件 + 振る舞い仕様 + 品質ゲート【fix 後の正。クローズ時に墓碑コミットへ蒸留して処分 — docs/appendix-records.md（retain 宣言で残置も可）】
 ├── sketch.md       # デザイン指示の読み取り + 変更/不可侵の領域マップ【UIタスクのみ・使い捨て】
 ├── design.md       # 前提・改変箇所・不変条件 + 発見ログ【実装完了まで】
+├── outline.md      # 型・シグネチャ・配置・コールスタック + 核の擬似コード + 論点と裁定【使い捨て】
 ├── plan.md         # マイルストーン + コンテキストマニフェスト【使い捨て】
 ├── trace.md        # gate 工程の B 行トレース表【使い捨て — strip の作業リストを兼ねる。処分は cleanup 工程で】
 └── review-ledger.md # review / codereview / feedback の指摘台帳（却下・反証破棄も記録）【使い捨て】
@@ -130,7 +131,7 @@ dandori-feedback で再開できる（ドキュメント処分済みのため sp
 ```yaml
 feature: user-notification        # フィーチャー名（ディレクトリ名と一致）
 course: full                      # full | short（改訂サイクルでは feedback が再判定する）
-phase: review                     # spec | sketch | ground | review | spike | plan | impl | codereview | refine | gate | annotate | strip | feedback | cleanup | done（feedback は gate → annotate → strip 後の安定点 — 継続改善の裁定点。cleanup へは feedback の完全 fix 裁定で進む）
+phase: review                     # spec | sketch | ground | review | spike | outline | plan | impl | codereview | refine | gate | annotate | strip | feedback | cleanup | done（feedback は gate → annotate → strip 後の安定点 — 継続改善の裁定点。cleanup へは feedback の完全 fix 裁定で進む）
 phases_done: [spec, ground]       # 完了済みフェーズ（feedback は改訂のたび再訪する — ここには入らない）
 revision: 2                       # 改訂サイクル番号（継続改善時のみ。初回サイクルは書かない — feedback が 2 から採番）
 sketch:
@@ -142,6 +143,9 @@ review:
 spike:
   status: skipped                 # pending | done | skipped
   reason: 全前提が実行検証済み
+outline:
+  status: done                    # pending | done | skipped（設計判断が薄いフィーチャーは理由つきで skip 可。短縮コースには存在しない）
+  reason: 既存 Repository への 1 メソッド追加のみ   # skipped のときだけ書く
 impl:
   milestones_done: 2              # 整数カウンタ（逐次実装）または完了 ID リスト [M1, M2]（並列実装 — workflow.js はこちらで記録）
   milestones_total: 5
@@ -176,13 +180,18 @@ design.md の発見ログに記録する。
   ハーネス側のタスク管理機構（セッション内のタスクリスト等）を進捗の記録に使わない —
   セッションをまたげないため二重管理になり、どちらが正か曖昧になる。使うなら state.yaml
   からの片方向の派生（表示目的）に限る
-- **ユーザー接点は3つに集約**: spec の壁打ち、レビュー結果の裁定、最終ゲートの裁定。それ以外は自律で進める
+- **ユーザー接点は4つに集約**: spec の壁打ち、プログラム設計（outline）の裁定、レビュー結果の裁定、
+  最終ゲートの裁定。それ以外は自律で進める。outline だけは他の3つと性質が違う —
+  他は「機械検査に載る軸の結果を人間が引き受ける」接点だが、outline は
+  **機械検査に原理的に載らない軸（可読性・再利用性・責務配置）を人間が判定する**唯一の接点であり、
+  サブエージェントへの委譲は論点の列挙までに限られる（詳細は dandori-outline）
 - **分類が定型の裁定は選択肢として出す**。構造化質問の機構（ハーネスの選択肢提示ツール等）が
   使える環境ではそれを使い、なければ選択肢を箇条書きで列挙して聞く。散文で聞くと選択肢の一部が
   黙って落ち、裁定結果を台帳・state.yaml へ転記するときの語彙も曖昧になる。該当する裁定点と
   選択肢の語彙は各工程の SKILL が定義している — gate の ❌/⚠️ 分類（実装バグ / 前提の欠落 /
   検証手段の不在）、feedback のトリアージ（5 分類）と再 gate 範囲（delta / full）、
-  review・codereview の escalate 後の裁定と `max_rounds` 打ち切り（続行 / 収束とみなす）。
+  review・codereview の escalate 後の裁定と `max_rounds` 打ち切り（続行 / 収束とみなす）、
+  outline の論点裁定（重複を許す / 統合する / 粒度を変える）。
   壁打ち（spec / sketch）は選択肢に落ちない探索なのでこの限りではない
 - **机上と現実を混同しない**。コードを読んで得た前提は「読解のみ」、実行して確かめた前提だけが「実行検証済」
 - **長時間ゲートの待ち方**: 全量スイート等の長いゲートをメインエージェントが自分で回すときは、

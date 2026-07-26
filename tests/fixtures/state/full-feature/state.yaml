@@ -1,7 +1,7 @@
 feature: full-feature
 course: full
 phase: impl
-phases_done: [spec, ground, review, spike, plan]
+phases_done: [spec, ground, review, spike, outline, plan]
 sketch:
   status: skipped
   reason: UI に触れない
@@ -11,6 +11,9 @@ review:
 spike:
   status: skipped
   reason: 全前提が実行検証済み
+outline:
+  status: skipped
+  reason: 既存 Repository への 1 メソッド追加のみ
 impl:
   milestones_done: 2
   milestones_total: 5

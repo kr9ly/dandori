@@ -19,7 +19,7 @@ design.md のリスクランキングを読む。以下なら **スキップ**:
 - `[読解のみ]` の前提が存在しない（すべて実行検証済み）
 - 残る `[読解のみ]` 前提がすべて「被害=低」
 
-スキップ時は state.yaml に `spike.status: skipped` と理由を記録し、dandori-plan へ。
+スキップ時は state.yaml に `spike.status: skipped` と理由を記録し、dandori-outline へ。
 **スキップは根拠つきの判定であり、省略ではない**。
 
 ### 2. スパイク実施
@@ -49,6 +49,6 @@ design.md のリスクランキングを読む。以下なら **スキップ**:
 
 ## 完了条件
 
-- state.yaml: `spike.status: done`（または skipped + 理由）、`phase: plan`、
+- state.yaml: `spike.status: done`（または skipped + 理由）、`phase: outline`、
   `phases_done` に spike 追加
 - 検証結果が design.md の発見ログに記録されている

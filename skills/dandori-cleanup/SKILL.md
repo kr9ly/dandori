@@ -53,7 +53,7 @@ strip 完了から時間が経っている（feedback で待機した・改訂�
    既存理解の訂正）の map への昇格。昇格元は次のステップで処分されるため、
    **必ず処分より前に**実行する。状態マップがあれば、design.md の「共有状態への影響」で
    宣言した writers/readers の増減を states.md に反映するのも update の一部
-2. sketch.md・plan.md・trace.md・review-ledger.md は役目を終える（削除 or アーカイブ。リポジトリ方針に従う）
+2. sketch.md・outline.md・plan.md・trace.md・review-ledger.md は役目を終える（削除 or アーカイブ。リポジトリ方針に従う）
 3. design.md は発見ログの spec 還流（dandori-gate §3）を済ませた上で同様に処分してよい
 4. spec.md も墓碑コミットで処分する（既定 — 正はソースコード + テスト、過去の判断は
    コミット履歴と ADR。改訂が来たら feedback が墓碑の親から復元する）。

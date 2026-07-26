@@ -145,7 +145,7 @@ state.yaml を巻き戻し先に合わせて初期化し、該当工程スキル
 - `phases_done:` を文脈に応じて巻き戻す:
   - **cleanup 前のループ**: 巻き戻し先**以降**のフェーズだけを外す — それより前の成果物
     （design.md / plan.md 等）は現役なので完了記録を残す（例: impl へ巻き戻し →
-    `[spec, sketch, ground, review, spike, plan]` を残し impl 以降 — codereview /
+    `[spec, sketch, ground, review, spike, outline, plan]` を残し impl 以降 — codereview /
     refine / gate / annotate / strip — を外す）
   - **done からの再開**: 成果物は処分済み — 残せるのは spec のみ
     （§4 で spec 改訂済みなら `[spec]`、spec 巻き戻しなら `[]`）
@@ -154,7 +154,9 @@ state.yaml を巻き戻し先に合わせて初期化し、該当工程スキル
   再実行するため、未割り当ての B 行は ⚠️ になる（`dandori-docs.ts plan` で確認）
 - 再走する工程（巻き戻し先以降）の per-phase セクション（review.rounds /
   impl.milestones_* / codereview / refine / annotate / strip 等）を初期状態に戻す —
-  前サイクルの記録は git 履歴が正。sketch は改訂スコープで再トリアージする（UI に触れるか）
+  前サイクルの記録は git 履歴が正。sketch は改訂スコープで再トリアージする（UI に触れるか）。
+  outline も同様に再判定する — ground へ巻き戻したなら改訂で責務配置が変わりうるので
+  再走が既定、impl への巻き戻しなら前サイクルの outline.md は現役として残す
 - `feedback.items:`（台帳の F 行数）と `feedback.trace_scope:`（§5 の裁定 —
   strip skip のプロジェクトでは書かない）を記録
 - `node <dandori-repo>/skills/dandori/scripts/dandori-docs.ts state <state.yaml>` を通す

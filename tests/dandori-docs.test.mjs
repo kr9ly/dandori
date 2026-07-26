@@ -63,7 +63,7 @@ function scratch(relPath) {
 // 覆っておらず、この経路を通っていなかった — 分割の安全網として引数の入口も固定する
 // ---------------------------------------------------------------------------
 
-const ALL_MODES = ['spec', 'plan', 'design', 'trace', 'ledger', 'ledger-append', 'map', 'state', 'residue']
+const ALL_MODES = ['spec', 'plan', 'design', 'outline', 'trace', 'ledger', 'ledger-append', 'map', 'state', 'residue']
 
 test('cli: モード名なし / 未知のモードは usage を出して exit 2', () => {
   for (const args of [[], ['unknown-mode']]) {
@@ -286,6 +286,14 @@ const STATE_CASES = [
     code: 1,
     findings: { Y4: 3 },
   },
+  {
+    // outline は短縮コースに存在しない工程。status 語彙は sketch / spike と同型で、
+    // skipped でない完了は成果物（outline.md）を要求する
+    name: 'Y1/Y3/Y4 — outline: 語彙外 status / 短縮コースに outline / 成果物欠落',
+    fixture: 'state/red-outline/state.yaml',
+    code: 1,
+    findings: { Y1: 1, Y3: 2, Y4: 1 },
+  },
 ]
 
 for (const c of STATE_CASES) {
@@ -394,6 +402,46 @@ test('design: 状態モデルのない spec では軸対応節を要求しない
   // D5 を無条件に要求すると、状態モデルを使わないプロジェクトで常に赤になる
   const r = run('design', join(FIX, 'spec/green.md'), join(FIX, 'design/green.md'))
   assert.equal(findings(r.out).D5, undefined, r.out)
+})
+
+// ---------------------------------------------------------------------------
+// outline モード — プログラム設計ドキュメントの形式検査（O1〜O4）
+//
+// この工程が扱うのは機械検査に原理的に載らない軸なので、検査は意図的に薄い。
+// 「B 行の網羅を検査しないこと」自体が仕様なので、それも固定する
+// ---------------------------------------------------------------------------
+
+const OUTLINE_SPEC = join(FIX, 'spec/green.md')
+const OUTLINE_DESIGN = join(FIX, 'design/green.md')
+
+test('outline: 正準形式の outline は指摘ゼロ', () => {
+  const r = run('outline', OUTLINE_SPEC, OUTLINE_DESIGN, join(FIX, 'outline/green.md'))
+  assert.equal(r.code, 0, `指摘ゼロのはず — 出力:\n${r.out}`)
+})
+
+test('outline: O1 / O2 / O4 — 必須節欠落・未裁定の論点・幽霊/削除済み B 行注記', () => {
+  // fixture が踏むべき指摘: 擬似コード節なし ×1 /
+  // 裁定が空「」と「未」×2 / B-9（幽霊）と B-4（削除済み）×2
+  const expected = { O1: 1, O2: 2, O4: 2 }
+  const r = run('outline', OUTLINE_SPEC, OUTLINE_DESIGN, join(FIX, 'outline/red.md'))
+  assert.equal(r.code, 1, `出力:\n${r.out}`)
+  assert.deepEqual(findings(r.out), expected, r.out)
+})
+
+test('outline: O3 — design に新規実装があるのに新規ファイルが1件もない', () => {
+  const r = run('outline', OUTLINE_SPEC, OUTLINE_DESIGN, join(FIX, 'outline/red-placement.md'))
+  assert.equal(r.code, 1, `出力:\n${r.out}`)
+  assert.deepEqual(findings(r.out), { O3: 1 }, r.out)
+})
+
+test('outline: B 行の網羅は検査しない（記載ゼロでも緑）', () => {
+  // 仕様: B 行のカバレッジ突合は plan モードの管轄。ここに持ち込むと裁定の議題が
+  // インターフェースの良し悪しから「抜けている仕様はないか」へ流れる。
+  // green.md は B-1..B-3 を1つも参照しないが、それは指摘にならない
+  const outline = readFileSync(join(FIX, 'outline/green.md'), 'utf8')
+  assert.ok(!/B-\d/.test(outline), 'fixture の前提が壊れている — green.md に B 行注記があってはならない')
+  const r = run('outline', OUTLINE_SPEC, OUTLINE_DESIGN, join(FIX, 'outline/green.md'))
+  assert.equal(r.code, 0, `B 行未記載を指摘してはならない — 出力:\n${r.out}`)
 })
 
 // ---------------------------------------------------------------------------
