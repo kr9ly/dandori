@@ -11,6 +11,7 @@ export const USAGE =
   '       node dandori-docs.ts trace <spec.md> <テストのディレクトリ|ファイル...> [--revision <n>] [--scope <優先ディレクトリ>...]\n' +
   '       node dandori-docs.ts ledger <review-ledger.md> [--mark-zero-round <R|C> <rd|auto>]\n' +
   '       node dandori-docs.ts ledger-append <review-ledger.md> --prefix <R|C|F> --rd <n> (--rows <json> | --rows-stdin)\n' +
+  '       node dandori-docs.ts ledger-update <review-ledger.md> (--rows <json> | --rows-stdin)\n' +
   '       node dandori-docs.ts map <mapファイル.md...> [--root <ソースルート>]\n' +
   '       node dandori-docs.ts state <state.yaml>\n' +
   '       node dandori-docs.ts residue <ファイル|ディレクトリ...>'

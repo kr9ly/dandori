@@ -6,15 +6,18 @@
  *   守る形を許す。2 行以上に及ぶ参照は各行にマーカーが必要）。
  *   RS1. B-ID トークン残存 — テスト名・コメント中の B-数字 トークン
  *   RS2. dandori 言及残存 — dandori の文字列（.dandori/ パス参照を含む）
- *   RS3. プロセス語彙残存 — レビュー指摘 ID（R-n / C-n / F-n）・工程ドキュメント参照
+ *   RS3. プロセス語彙残存 — レビュー指摘 ID（R-n / C-n / F-n。ハイフンなしの R12 等も
+ *        severity 語が近傍にある形は検出）・severity 番号トークン（major-n 等）・
+ *        裁定番号参照（「裁定 3」）・工程ドキュメント参照
  *        （design.md / spec.md / plan.md / trace.md / sketch.md / review-ledger）・
  *        地雷リスト参照・軸対応・spec §n（get-cart 初回クローズで手動掃除 21 件が
- *        検出網の外だった実績からの拡充）。V1 等の状態変数 ID はハイフンなしの
- *        英数字列で誤検出（V8 エンジン・バージョン表記）が多いため対象外 — 目視で拾う
+ *        検出網の外だった実績 + 第 5 波 strip 漏れの実測からの拡充）。V1 等の状態変数 ID は
+ *        ハイフンなしの英数字列で誤検出（V8 エンジン・バージョン表記）が多いため
+ *        単体では対象外 — 目視で拾う
  *   対象は今回のフィーチャーが触れたファイルに限ること（並行フィーチャーの B-ID は現役）
  */
 
-import { join, readFileSync } from '../env.ts'
+import { readFileSync } from '../env.ts'
 import { findings, finishReport } from '../report.ts'
 import { B_TOKEN_RE, normalizeBIdToken, walkFiles } from '../scan.ts'
 import { USAGE } from '../usage.ts'
@@ -27,9 +30,14 @@ export function run(argvRest: string[]): void {
   const roots = argvRest.slice(1)
   if (roots.length === 0 || roots.some(p => p.startsWith('--'))) { console.error(USAGE); process.exit(2) }
 
-  // RS3: プロセス語彙のパターン集。V1 等のハイフンなし状態変数 ID は誤検出が多く対象外（ヘッダ参照）
+  // RS3: プロセス語彙のパターン集。V1 等のハイフンなし状態変数 ID は誤検出が多く対象外（ヘッダ参照）。
+  // ハイフンなしのレビュー ID（R12 等）単体も同じ理由で対象外だが、severity 語が近傍にある形
+  // （「R12 major-1」等）と裁定番号参照は誤検出源が乏しいため検出する（第 5 波 strip 漏れの実測拡充）
   const RS3_PATTERNS: Array<{ re: RegExp; label: string }> = [
     { re: /(?<![\w-])[RCF]-\d+(?![\w-])/, label: 'レビュー指摘 ID（R-n / C-n / F-n）' },
+    { re: /(?<![\w-])[RCF]\d+(?![\w-])(?=.{0,30}(?:blocker|major|minor))/, label: 'レビュー指摘 ID（ハイフンなし + severity 語近傍）' },
+    { re: /(?:blocker|major|minor)-\d+/, label: 'severity 番号トークン（major-n 等）' },
+    { re: /裁定\s*\d+/, label: '裁定番号参照' },
     { re: /(?:design|spec|plan|trace|sketch)\.md|review-ledger/, label: '工程ドキュメント参照' },
     { re: /地雷(?:\s*\d+|リスト)/, label: '地雷リスト参照' },
     { re: /軸対応/, label: '状態モデル軸対応の語彙' },

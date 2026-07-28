@@ -13,11 +13,12 @@ import * as _path from 'node:path'
 // @ts-ignore -- 同上
 import * as _cp from 'node:child_process'
 
-export const { readFileSync, readdirSync, statSync, appendFileSync } = _fs as {
+export const { readFileSync, readdirSync, statSync, appendFileSync, writeFileSync } = _fs as {
   readFileSync(path: string, enc: string): string
   readdirSync(path: string): string[]
   statSync(path: string): { isDirectory(): boolean; size: number }
   appendFileSync(path: string, data: string): void
+  writeFileSync(path: string, data: string): void
 }
 export const { join, dirname, resolve } = _path as {
   join(...p: string[]): string

@@ -23,6 +23,8 @@
  *   node dandori-docs.ts ledger <review-ledger.md> [--mark-zero-round <R|C> <rd|auto>]
  *   node dandori-docs.ts ledger-append <review-ledger.md> --prefix <R|C|F> --rd <n> --rows-stdin <<'JSON' ... JSON
  *     （--rows <json> でも渡せる。追記は決定的・冪等 — 行の書式と ID 発番はここが唯一の出所）
+ *   node dandori-docs.ts ledger-update <review-ledger.md> --rows-stdin <<'JSON' ... JSON
+ *     （既存行の処置・根拠セルの更新。語彙・再燃参照・反証破棄の上書き禁止を書き込み時点で強制）
  *   node dandori-docs.ts map <mapファイル.md...> [--root <ソースルート>]
  *     （アンカーはソースルートの git リポジトリルート相対。--root 省略時は map の所在から導出）
  *   node dandori-docs.ts state <state.yaml>
@@ -44,6 +46,7 @@ import * as outlineMode from './docs/modes/outline.ts'
 import * as traceMode from './docs/modes/trace.ts'
 import * as ledgerMode from './docs/modes/ledger.ts'
 import * as ledgerAppendMode from './docs/modes/ledger-append.ts'
+import * as ledgerUpdateMode from './docs/modes/ledger-update.ts'
 import * as mapMode from './docs/modes/map.ts'
 import * as stateMode from './docs/modes/state.ts'
 import * as residueMode from './docs/modes/residue.ts'
@@ -59,6 +62,7 @@ const RUNNERS: Record<string, (argvRest: string[]) => void> = {
   trace: traceMode.run,
   ledger: ledgerMode.run,
   'ledger-append': ledgerAppendMode.run,
+  'ledger-update': ledgerUpdateMode.run,
   map: mapMode.run,
   state: stateMode.run,
   residue: residueMode.run,

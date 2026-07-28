@@ -63,7 +63,7 @@ function scratch(relPath) {
 // 覆っておらず、この経路を通っていなかった — 分割の安全網として引数の入口も固定する
 // ---------------------------------------------------------------------------
 
-const ALL_MODES = ['spec', 'plan', 'design', 'outline', 'trace', 'ledger', 'ledger-append', 'map', 'state', 'residue']
+const ALL_MODES = ['spec', 'plan', 'design', 'outline', 'trace', 'ledger', 'ledger-append', 'ledger-update', 'map', 'state', 'residue']
 
 test('cli: モード名なし / 未知のモードは usage を出して exit 2', () => {
   for (const args of [[], ['unknown-mode']]) {
@@ -195,6 +195,67 @@ test('ledger-append: 同一 Rd の同一論点は追記されない（冪等 —
   const rows2 = (readFileSync(path, 'utf8').match(/^\| R-\d+ \|/gm) || []).length
   assert.equal(rows2, rows1, '二重実行で行が増えている')
   assert.match(r2.out, /^\[appended\] index=0 id=R-4 status=existing$/m, r2.out)
+})
+
+// ---------------------------------------------------------------------------
+// ledger-update モード — 処置セルの更新（書き込み）。語彙・参照整合の強制が本体
+// ---------------------------------------------------------------------------
+
+test('ledger-update: 処置と理由を更新し、[updated] 行を返す（冪等 — 同値の再実行は unchanged）', () => {
+  const path = scratch('ledger/verdict-passed.md')
+  const rows = JSON.stringify([{ id: 'R-3', action: '反映済', reason: '裁定で採用 — 表現を修正' }])
+  const r = run('ledger-update', path, '--rows', rows)
+  assert.equal(r.code, 0, r.out)
+  assert.match(r.out, /^\[updated\] id=R-3 status=changed$/m, r.out)
+  assert.match(readFileSync(path, 'utf8'), /^\| R-3 \| 1 \| minor \| .+ \| 反映済 \| 裁定で採用 — 表現を修正 \|$/m)
+  const before = readFileSync(path, 'utf8')
+  const r2 = run('ledger-update', path, '--rows', rows)
+  assert.equal(r2.code, 0, r2.out)
+  assert.match(r2.out, /^\[updated\] id=R-3 status=unchanged$/m, r2.out)
+  assert.equal(readFileSync(path, 'utf8'), before, '冪等な再実行でファイルが変わっている')
+})
+
+test('ledger-update: 語彙外の処置（「反映済み」の揺れ）と実在しない ID は exit 2 で何も書かない', () => {
+  // 第 5 波実測: scribe の語彙揺れ「反映済み」が台帳に入り escalated を誘発 — 入口で弾く
+  const path = scratch('ledger/verdict-passed.md')
+  const before = readFileSync(path, 'utf8')
+  for (const rows of [
+    [{ id: 'R-1', action: '反映済み' }],
+    [{ id: 'R-99', action: '反映済' }],
+    [{ id: 'R-1', action: '却下' }], // 却下は理由必須
+  ]) {
+    const r = run('ledger-update', path, '--rows', JSON.stringify(rows))
+    assert.equal(r.code, 2, `rows=${JSON.stringify(rows)} — 出力:\n${r.out}`)
+  }
+  assert.equal(readFileSync(path, 'utf8'), before, '拒否したのにファイルが変わっている')
+})
+
+test('ledger-update: 同一 Rd の行への 再燃→ は拒否（dup_in_round の誤記）、前ラウンドへは通る', () => {
+  const path = scratch('ledger/verdict-passed.md')
+  // R-1 と R-2 は同じ Rd1 — 同一ラウンド内の重複は再燃ではない（第 5 波実測の誤用形）
+  const bad = run('ledger-update', path, '--rows', JSON.stringify([{ id: 'R-2', action: '再燃→R-1' }]))
+  assert.equal(bad.code, 2, bad.out)
+  // Rd3 に行を足してから前ラウンド（Rd1）の R-1 への再燃 — これは正当
+  run('ledger-append', path, '--prefix', 'R', '--rd', '3', '--rows', ROWS)
+  const good = run('ledger-update', path, '--rows', JSON.stringify([{ id: 'R-4', action: '再燃→R-1' }]))
+  assert.equal(good.code, 0, good.out)
+  assert.match(good.out, /^\[updated\] id=R-4 status=changed$/m, good.out)
+})
+
+test('ledger-update: 反証破棄で確定した行の上書きは拒否（反証済み確定の巻き戻し禁止）', () => {
+  const path = scratch('ledger/verdict-passed.md')
+  const r1 = run('ledger-update', path, '--rows', JSON.stringify([{ id: 'R-1', action: '反証破棄', reason: '実測で到達不能を確認' }]))
+  assert.equal(r1.code, 0, r1.out)
+  const r2 = run('ledger-update', path, '--rows', JSON.stringify([{ id: 'R-1', action: '反映済' }]))
+  assert.equal(r2.code, 2, r2.out)
+})
+
+test('ledger-update: 更新後の台帳が ledger モードの形式検査を通る', () => {
+  const path = scratch('ledger/verdict-passed.md')
+  run('ledger-update', path, '--rows', JSON.stringify([{ id: 'R-3', action: '反映済', reason: '裁定で採用' }]))
+  const r = run('ledger', path)
+  assert.equal(r.code, 0, r.out)
+  assert.deepEqual(findings(r.out), {}, r.out)
 })
 
 // ---------------------------------------------------------------------------
@@ -343,6 +404,13 @@ test('residue: strip 済みのコードは指摘ゼロ（dandori-ok の機能的
   const r = run('residue', join(FIX, 'residue/clean'))
   assert.equal(r.code, 0, r.out)
   assert.match(r.out, /dandori-ok 除外 2 行/, r.out)
+})
+
+test('residue: RS3 拡充 — ハイフンなしレビュー ID + severity 語 / severity 番号 / 裁定番号（第 5 波 strip 漏れの実測形）', () => {
+  // V8 major 等の「RCF 以外 + severity 語」は誤検出しない（fixture に負例を含む）
+  const r = run('residue', join(FIX, 'residue/wave5'))
+  assert.equal(r.code, 1, r.out)
+  assert.deepEqual(findings(r.out), { RS3: 3 }, r.out)
 })
 
 test('residue: dandori-ok の除外範囲はマーカー行と直後 1 行だけ', () => {

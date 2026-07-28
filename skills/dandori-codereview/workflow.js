@@ -213,6 +213,24 @@ const APPEND_SCHEMA = {
   },
 }
 
+// 処置更新コマンドの出力転記のみ — 追記（APPEND_SCHEMA）と同じ縮退。処置セルの更新も
+// エージェントの Edit を経由しない（ledger-append は追記だけを Edit から外したが、
+// 処置更新が Edit に残った結果、語彙揺れ「反映済み」と同一 Rd 行への「再燃→」誤用で
+// escalated 誤判定、処置の書き落としで生存指摘の返却漏れが再発した — 2026-07-28 第 5 波実測）
+const UPDATE_SCHEMA = {
+  type: 'object',
+  required: ['updated_lines', 'exit_code'],
+  properties: {
+    updated_lines: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '出力中の「[updated] 」で始まる行の逐語転記（1 行 1 要素）',
+    },
+    exit_code: { type: 'integer', description: 'コマンドの exit code（0 = 更新成功）' },
+    output: { type: 'string', description: 'exit code が 0 でない場合のみ: 生の出力の要点' },
+  },
+}
+
 const VERDICT_SCHEMA = {
   type: 'object',
   required: ['refuted', 'basis'],
@@ -272,15 +290,6 @@ const judgeVerdict = (judge) => {
     return 'continue'
   }
   return m[1]
-}
-
-const ACK_SCHEMA = {
-  type: 'object',
-  required: ['done'],
-  properties: {
-    done: { type: 'boolean' },
-    note: { type: 'string', description: '更新できなかった行があればその内容' },
-  },
 }
 
 const SETUP_SCHEMA = {
@@ -441,15 +450,55 @@ ${f.lane === 'mutation' ? '\nこの指摘は生存ミュータント由来。反
 根拠: ${f.evidence}${f.check ? `\n白黒を付ける確認手段（発見係の提案）: ${f.check}` : ''}
 レビュー対象の差分の取得コマンド: ${DIFF_CMD}${workRootNote}`
 
-const verdictScribePrompt = (verdicts) => `指摘台帳 ${LEDGER} の処置列を反証結果で更新してください。対象行のみ編集し、他の行は触らないこと。
+// 処置更新も dandori-docs ledger-update に委ねる（決定的・語彙と再燃参照の強制つき）—
+// 更新する行と値は workflow が反証結果 / 修正報告から決定的に構築し、エージェントは
+// コマンドの逐語実行と出力転記だけを担う。処置更新をエージェントの Edit に残した設計では、
+// 語彙揺れ（「反映済み」）・同一 Rd 行への「再燃→」誤用・処置の書き落とし（生存指摘の
+// 返却漏れ）が LEDGER_VOCAB のプロンプト注入を越えて再発した（2026-07-28 第 5 波実測）
+const updatePrompt = (rows) => `次のコマンドを**一字一句そのまま**実行し、出力の「[updated] 」で始まる行を
+すべて逐語転記（updated_lines）し、exit code を報告してください。
 
-反証結果(JSON):
-${JSON.stringify(verdicts.map(v => ({ id: v.id, refuted: v.refuted, basis: v.basis, rekindleOf: v.rekindleOf })), null, 2)}
+コマンドの編集（パス・オプション・JSON の書き換え）と、台帳ファイルの手編集はしないこと —
+処置の語彙・書式・参照整合はこのコマンドが決定的に強制します。
 
-- refuted=true → 処置を「反証破棄」にし、根拠・理由セルを反証根拠（basis）で置き換える
-- refuted=false かつ rekindleOf あり → 処置を「再燃→<rekindleOf>」にする
-- refuted=false かつ rekindleOf なし → 何もしない（処置は修正フェーズで記録される）
-${LEDGER_VOCAB}`
+${CHECK} ledger-update ${LEDGER} --rows-stdin <<'ROWS_JSON_EOF'
+${JSON.stringify(rows, null, 2)}
+ROWS_JSON_EOF`
+
+// 台帳行を持つ ID だけが処置更新の対象（仮 ID C-?(...) は台帳に行がない — 追記失敗時の続行印）
+const hasLedgerRow = (id) => /^[RCF]-\d+$/.test(id)
+
+// 反証結果 → 処置更新行の決定的な変換（旧 verdictScribePrompt のルールをスクリプト側に固定）
+const verdictRows = (verdicts) => {
+  const rows = []
+  for (const v of verdicts) {
+    if (!v.refuted && !v.rekindleOf) continue // 処置は修正フェーズで記録される
+    if (!hasLedgerRow(v.id)) {
+      log(`台帳行のない指摘（${v.id}）— 処置更新をスキップ（追記失敗の続行印。行がないため判定も汚染しない）`)
+      continue
+    }
+    if (v.refuted) rows.push({ id: v.id, action: '反証破棄', reason: v.basis })
+    else rows.push({ id: v.id, action: `再燃→${v.rekindleOf}` })
+  }
+  return rows
+}
+
+// 処置更新の実行（1 回再試行つき）。戻り値は成功可否 — 失敗の扱い（escalate するか続行するか）は
+// 呼び出し点が決める
+async function runLedgerUpdate(rows, round, label) {
+  if (rows.length === 0) return { ok: true }
+  let r = await serializedLedger(() =>
+    tryAgent(updatePrompt(rows), { label, phase: `Rd${round} 台帳`, schema: UPDATE_SCHEMA, ...role('scribe', { model: 'sonnet', effort: 'low' }) }))
+  if (!r || r.exit_code !== 0) {
+    log(`${label}: 台帳処置更新が未完了（exit ${r ? r.exit_code : '無応答'}）— 1 回だけ再試行`)
+    r = await serializedLedger(() =>
+      tryAgent(updatePrompt(rows), { label: `${label}(再試行)`, phase: `Rd${round} 台帳`, schema: UPDATE_SCHEMA, ...role('scribe', { model: 'sonnet', effort: 'low' }) }))
+  }
+  if (!r || r.exit_code !== 0) {
+    return { ok: false, detail: (r && r.output) || '記録係無応答' }
+  }
+  return { ok: true }
+}
 
 const fixPrompt = (survivors) => `あなたは dandori-impl の修正ループ（単発）を実行する実装エージェントです。
 コードレビューの反証フェーズを生き残った以下の指摘を修正してください。
@@ -470,8 +519,8 @@ ${JSON.stringify(survivors.map(s => ({ id: s.id, severity: s.severity, lane: s.l
   異常を検出して処理を継続する分岐は、その振る舞いを規定する B 行がある場合に限り書いてよい
 - lane=mutation の指摘（生存ミュータント）はテスト追加で殺すこと
 - 作成・変更するテストの名前（test タイトルまたは describe）に、検証対象の B 行 ID を含めること
-- 修正した指摘は台帳の該当行（ID で特定）の処置列を「反映済」にし、根拠・理由セルに対応を一行で記録すること。
-  ${LEDGER_VOCAB}
+- **指摘台帳（${LEDGER}）は編集しないこと** — 修正した指摘の処置記録（反映済）は
+  後段の決定的コマンドが fixed の報告から行う。note には対応内容を一行で書くこと（根拠・理由セルになる）
 - 完了時に以下のゲートを自分で実行し、緑になるまで修正すること。生の出力の要点を gate_output で報告すること:
 ${GATES.map(g => `  - ${g}`).join('\n')}
 
@@ -673,19 +722,13 @@ while (true) {
 
   if (verdicts.length > 0) {
     // 反証結果の記入は収束判定の生命線 — 未記入のまま進むと反証破棄済みの行が生存として
-    // 数えられ、判定が汚染される（review 側の実戦観測と同型）。ACK を検査し、失敗は
-    // 1 回だけ再試行、それでも書けなければ明示的に escalate する
-    let ack = await serializedLedger(() =>
-      tryAgent(verdictScribePrompt(verdicts), { label: '台帳:反証結果', phase: `Rd${round} 台帳`, schema: ACK_SCHEMA, ...role('scribe', { model: 'sonnet', effort: 'low' }) }))
-    if (!ack || !ack.done) {
-      log('反証結果の台帳記入が未完了 — 1 回だけ再試行')
-      ack = await serializedLedger(() =>
-        tryAgent(verdictScribePrompt(verdicts), { label: '台帳:反証結果(再試行)', phase: `Rd${round} 台帳`, schema: ACK_SCHEMA, ...role('scribe', { model: 'sonnet', effort: 'low' }) }))
-    }
-    if (!ack || !ack.done) {
+    // 数えられ、判定が汚染される（review 側の実戦観測と同型）。更新行は反証結果から
+    // 決定的に構築し、失敗は 1 回だけ再試行、それでも書けなければ明示的に escalate する
+    const upd = await runLedgerUpdate(verdictRows(verdicts), round, '台帳:反証結果')
+    if (!upd.ok) {
       return {
         status: 'escalated',
-        reason: `反証結果を台帳に記入できなかった（${(ack && ack.note) || '記録係無応答'}）— 処置列が空欄のまま閉じると判定が汚染される。台帳をメインで修復してから新規実行で再開すること`,
+        reason: `反証結果を台帳に記入できなかった（${upd.detail}）— 処置列が空欄のまま閉じると判定が汚染される。台帳をメインで修復してから新規実行で再開すること`,
         minors, lastRound: round, ledger: LEDGER,
       }
     }
@@ -725,6 +768,22 @@ while (true) {
   const fix = await tryAgent(fixPrompt(survivors), { label: '修正', phase: `Rd${round} 修正`, schema: FIX_SCHEMA, ...role('fix') })
   if (!fix) {
     return { status: 'gate_red', reason: '修正エージェントが結果を返さなかった', survivors, minors, lastRound: round, ledger: LEDGER }
+  }
+  // 修正報告 → 台帳の「反映済」記録も決定的コマンドで行う（fix エージェントの Edit を経由しない）。
+  // needs_adjudication / gate_red で返す場合も、修正済みの分は先に記録する — 記録漏れは
+  // 未処置行として収束判定を汚染し、生存指摘が返却から漏れる（2026-07-28 第 5 波実測）
+  {
+    const fixed = fix.fixed || []
+    fixed.filter(x => !hasLedgerRow(x.id)).forEach(x => log(`台帳行のない修正報告（${x.id}）— 処置更新をスキップ`))
+    const rows = fixed.filter(x => hasLedgerRow(x.id)).map(x => ({ id: x.id, action: '反映済', reason: x.note || '修正済' }))
+    const upd = await runLedgerUpdate(rows, round, '台帳:修正結果')
+    if (!upd.ok) {
+      return {
+        status: 'escalated',
+        reason: `修正結果を台帳に記入できなかった（${upd.detail}）— 処置列が空欄のまま閉じると判定が汚染される。台帳をメインで修復してから新規実行で再開すること`,
+        fixed: fix.fixed, minors, lastRound: round, ledger: LEDGER,
+      }
+    }
   }
   if (fix.needs_adjudication && fix.needs_adjudication.length > 0) {
     return {
