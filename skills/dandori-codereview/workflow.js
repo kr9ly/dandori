@@ -4,8 +4,8 @@
 // このスクリプトのプロンプトは同一 args なら不変のため、resume では全 agent 呼び出しが
 // キャッシュ再生され、ディスク（台帳 / state.yaml / 対象ドキュメント）を読み直さずに
 // 停止時の結果をそのまま返す（2026-07-08 実測: 13ms・トークン 0 で旧結果が再返却）。
-// 継続状態はディスクが保持し、入口確認エージェントが続き（次ラウンド / 残マイルストーン）を
-// 導出する — 新規実行が正しい再開手段。
+// 継続状態はディスクが保持し、入口確認エージェントが続き（次ラウンド / 残マイルストーン /
+// 処置セルが空のまま残った未処置行の修正キュー合流）を導出する — 新規実行が正しい再開手段。
 export const meta = {
   name: 'dandori-codereview',
   description: 'dandori codereview 工程の決定的ループ — 入口検査 → 5レーン独立レビュー → 台帳追記 → 指摘ごと反証 → 修正 → dandori-docs ledger 収束判定',
@@ -294,13 +294,18 @@ const judgeVerdict = (judge) => {
 
 const SETUP_SCHEMA = {
   type: 'object',
-  required: ['gates_green', 'files_ok', 'max_c_round'],
+  required: ['gates_green', 'files_ok', 'max_c_round', 'pending_lines'],
   properties: {
     gates_green: { type: 'boolean' },
     gate_summary: { type: 'string', description: '赤があれば生の出力の要点' },
     files_ok: { type: 'boolean' },
     missing: { type: 'string', description: '欠けているファイル' },
     max_c_round: { type: 'integer', description: '台帳の C-n 行の最大 Rd（台帳や C 行がなければ 0）' },
+    pending_lines: {
+      type: 'array',
+      items: { type: 'string' },
+      description: '台帳検査出力中の「[pending] 」で始まる行の逐語転記（1 行 1 要素。台帳がない・該当行がなければ空配列）',
+    },
   },
 }
 
@@ -415,8 +420,9 @@ ${JSON.stringify(majors.map((f, index) => ({ index, severity: f.severity, title:
 
 判定（各指摘ごと）:
 - 同一論点の既存行の処置が「反証破棄」→ disposition=skip_refuted、matched にその ID（反証済みの再生産）
-- 同一論点の既存行の処置が**空**（今ラウンドで別レーンが先に記録した未処置行）→
-  disposition=dup_in_round、matched にその ID（同一ラウンド内の重複指摘 — 先行行の側で反証される）
+- 同一論点の既存行の処置が**空** → disposition=dup_in_round、matched にその ID
+  （今ラウンドで別レーンが先に記録した未処置行、または再開時に修正キューへ合流済みの
+  過去ラウンド未処置行 — どちらも先行行の側で反証・修正される）
 - 同一論点の既存行の処置がそれ以外（反映済・却下など）→ disposition=rekindle、matched にその ID
 - 一致する既存行なし → disposition=new、matched は null
 
@@ -546,6 +552,11 @@ ${GATES.map(g => `   - ${g}`).join('\n')}
 2. ${SPEC} と ${DESIGN} が存在するか確認する
 3. ${LEDGER} が存在すれば読み、C-n 行の Rd 列の最大値を max_c_round として報告する
    （台帳がない・C 行がない場合は 0）
+4. ${LEDGER} が存在すれば次のコマンドを実行し、出力中の「[pending] 」で始まる行を
+   **一字一句そのまま**すべて逐語転記（pending_lines）すること（該当行がない・台帳が
+   なければ空配列）。このコマンドの exit code はここでは合否に使わない — 未処置行の
+   指摘（exit 1）が出るのは想定内で、失敗として扱わないこと:
+   ${CHECK} ledger ${LEDGER}
 
 コードの修正はしないこと。赤のゲートがあれば gate_summary に生の出力の要点を入れること。
 
@@ -692,6 +703,43 @@ if (!setup.gates_green) {
 const startRound = (setup.max_c_round || 0) + 1
 let round = startRound
 let active = Object.keys(LANES)
+
+// ---- 再開時の未処置行合流（carryover）----------------------------------------
+// needs_adjudication 等で停止した前回実行は、「反証を生き残ったが処置セルが空のまま」の
+// C 行を台帳に残す。新規実行のレーンが同一論点を再指摘しても照合係が既存行に畳む
+// （dup_in_round）ため、この行は修正ループに二度と入らない — 放置すると収束後の
+// 形式検査（L2 未処置）で exit 1 となり、実態 passed なのに escalated が返る
+// （2026-08-03 第 6 波実測: admin-gift-product C-3/C-12）。台帳検査の [pending] 行
+// （dandori-docs ledger の決定的抽出）から blocker/major の C 行を初回ラウンドの
+// 修正キューへ合流させる。裁定で却下した指摘は、再実行の前にメインが ledger-update で
+// 「却下」を記録しておくこと（SKILL.md）— 処置セルが空のままだとここで修正対象として再浮上する
+const carryover = []
+for (const line of setup.pending_lines || []) {
+  const m = String(line).match(/^\[pending\]\s+(\{.*\})\s*$/)
+  let p = null
+  if (m) { try { p = JSON.parse(m[1]) } catch { p = null } }
+  if (!p || typeof p.id !== 'string') {
+    log(`入口検査の pending 行が解釈不能（"${line}"）— 合流をスキップ（未処置のまま残れば収束判定の L2 が検出する）`)
+    continue
+  }
+  if (!/^C-\d+$/.test(p.id)) continue // R / F 行はこの工程の管轄外
+  if (p.severity !== 'blocker' && p.severity !== 'major') {
+    log(`未処置の C 行 ${p.id} は ${p.severity} — 修正キューに載せない（収束判定の L2 が検出する）`)
+    continue
+  }
+  carryover.push({
+    id: p.id,
+    severity: p.severity,
+    lane: 'carryover',
+    title: p.topic,
+    detail: `前回実行の反証フェーズを生き残ったまま処置されずに残っている指摘（Rd${p.rd} 由来）。` +
+      'spec / design に裁定が反映済みならそれに従って修正すること。',
+    evidence: p.reason,
+  })
+}
+if (carryover.length > 0) {
+  log(`再開検出: 処置セルが空の過去ラウンド C 行 ${carryover.length} 件（${carryover.map(c => c.id).join(', ')}）を初回ラウンドの修正キューへ合流する`)
+}
 // 台帳に C 行が存在するか — 収束判定（dandori-docs）を呼ぶべきかの判断材料。
 // 再開セッション（過去ラウンドの C 行あり）でも判定を飛ばさないため setup から引き継ぐ
 let cRowsExist = (setup.max_c_round || 0) > 0
@@ -735,7 +783,15 @@ while (true) {
   }
 
   const survivors = verdicts.filter(v => !v.refuted)
-  log(`ラウンド ${round}: blocker/major ${verdicts.length} 件 → 反証生存 ${survivors.length} 件（minor 累計 ${minors.length} 件）`)
+  // 再開合流分は初回ラウンドの修正キューに直接入れる — 前回実行の反証を既に生き残った
+  // 指摘なので反証フェーズは通さない。今ラウンドのレーンが同一論点を再指摘した場合は
+  // 照合係が既存 ID に畳む（dup_in_round）ため二重には並ばないが、念のため ID でも
+  // 重複排除する
+  if (round === startRound && carryover.length > 0) {
+    const ids = new Set(survivors.map(s => s.id))
+    survivors.push(...carryover.filter(c => !ids.has(c.id)))
+  }
+  log(`ラウンド ${round}: blocker/major ${verdicts.length} 件 → 反証生存 ${survivors.length} 件${round === startRound && carryover.length > 0 ? `（再開合流 ${carryover.length} 件を含む）` : ''}（minor 累計 ${minors.length} 件）`)
 
   if (survivors.length === 0) {
     // 生存ゼロのラウンド = 収束。台帳に C 行があれば dandori-docs で機械確認する
@@ -826,8 +882,11 @@ while (true) {
   }
 
   // 修正に関係するレーンだけ新しいエージェントで再レビュー（前ラウンドの記憶を持たせない）。
-  // 生存ミュータント由来の修正はテスト追加なので、テスト忠実度レーンで再確認する
+  // 生存ミュータント由来の修正はテスト追加なので、テスト忠実度レーンで再確認する。
+  // 再開合流分（carryover）は由来レーンが台帳から復元できないため、含まれていたら全レーンで再レビューする
   const laneSet = new Set(survivors.map(s => (s.lane === 'mutation' ? 'fidelity' : s.lane)))
-  active = Object.keys(LANES).filter(k => laneSet.has(k))
+  active = laneSet.has('carryover')
+    ? Object.keys(LANES)
+    : Object.keys(LANES).filter(k => laneSet.has(k))
   round += 1
 }

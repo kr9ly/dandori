@@ -24,6 +24,11 @@
  *   （ゼロラウンドは記録済み — 常に +1 する実装だと auto の再実行でラウンドが際限なく進む）。
  *   呼び出し側のローカルなラウンド数え上げを渡すと既存 Rd 系列と食い違うマーカーが打たれ、
  *   収束済みなのに escalated になる（2026-07-25 実戦観測）。
+ *   未処置行（処置セルが空）は L2 の指摘に加えて `[pending] <JSON>` の機械可読行でも出力する —
+ *   needs_adjudication 等で停止した workflow の新規実行（再開）が、前回の反証を生き残ったまま
+ *   処置されずに残った行を修正キューへ決定的に合流させるための出所（2026-08-03 第 6 波対策。
+ *   再開時に旧ラウンドの未処置行が再訪されず、後続の同一論点指摘も照合で既存 ID に畳まれて
+ *   修正が二度と起動しない → 収束後の L2 で exit 1 → 実態 passed なのに escalated が返った）。
  */
 
 import { appendFileSync, join } from '../env.ts'
@@ -214,6 +219,11 @@ export function run(argvRest: string[]): void {
   const zrTotal = [...zeroRounds.values()].reduce((n, s) => n + s.size, 0)
   console.log(`行 ${rows.length}（R: ${rows.filter(r => r.prefix === 'R').length} / C: ${rows.filter(r => r.prefix === 'C').length} / F: ${rows.filter(r => r.prefix === 'F').length}）` +
     (zrTotal > 0 ? ` / 指摘なしマーカー ${zrTotal}` : ''))
+  // 未処置行の機械可読出力 — 再開する workflow が修正キューへ合流させる（JSON はセルの
+  // エスケープ差を吸収する。転記エージェント経由でも JSON.parse で決定的に復元できる形）
+  for (const r of rows.filter(r => r.action === '')) {
+    console.log(`[pending] ${JSON.stringify({ id: r.id, rd: r.rd, severity: r.severity, topic: r.topic, reason: r.reason })}`)
+  }
   console.log('')
   for (const [prefix, label] of [['R', 'dandori-review'], ['C', 'dandori-codereview']] as const) {
     const prows = rows.filter(r => r.prefix === prefix)

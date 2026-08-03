@@ -138,6 +138,22 @@ for (const c of LEDGER_CASES) {
   })
 }
 
+// 未処置行の [pending] 機械可読行 — needs_adjudication 停止後の再開（新規実行）が
+// 旧ラウンドの未処置行を修正キューへ合流させるための出所。JSON で出す（セルの
+// エスケープ差を吸収し、転記エージェント経由でも JSON.parse で決定的に復元できる形）
+test('ledger: 処置セルが空の行は [pending] の JSON 行で出力される', () => {
+  const r = run('ledger', join(FIX, 'ledger/lint-unprocessed.md'))
+  const pending = [...r.out.matchAll(/^\[pending\] (.+)$/gm)].map(m => JSON.parse(m[1]))
+  assert.deepEqual(pending, [
+    { id: 'C-1', rd: 1, severity: 'blocker', topic: '不変条件を破る経路がある', reason: '' },
+  ], `出力:\n${r.out}`)
+})
+
+test('ledger: 全行処置済みの台帳には [pending] 行が出ない', () => {
+  const r = run('ledger', join(FIX, 'ledger/verdict-passed.md'))
+  assert.doesNotMatch(r.out, /^\[pending\] /m, `出力:\n${r.out}`)
+})
+
 test('ledger: --mark-zero-round auto は行の最大 Rd の次にマーカーを打ち、その場で passed を出す', () => {
   // 工程側のローカルな数え上げを渡すと台帳の Rd 系列と食い違うマーカーが打たれ、
   // 収束済みなのに escalated になる（2026-07-25 実戦観測）— auto が正しい渡し方
